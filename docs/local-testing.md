@@ -56,8 +56,11 @@ After creating it:
 
 ```bash
 cp .env.example .env
-# fill in GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, GITHUB_WEBHOOK_SECRET,
-# and a RUNSTAGE_RUNNER_TOKEN (openssl rand -hex 32)
+# fill in GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, GITHUB_WEBHOOK_SECRET
+
+# Register a runner. Prints its token ONCE; only the SHA-256 hash goes into the runners file.
+npm run -s runner-token -- mint --id my-laptop --repo <owner>/<test-repo>
+# (--repo is optional and repeatable; without it the runner may claim jobs for any repo.)
 
 set -a; source .env; set +a
 npm run dev:history &       # optional: hosted history stub on :3100
@@ -90,10 +93,30 @@ run from the root of a worktree of the PR head, so they see the PR's code; use
 On the machine that has a checkout of the test repo (macOS or Linux):
 
 ```bash
-export RUNSTAGE_RUNNER_TOKEN=<same token as the App>
+export RUNSTAGE_RUNNER_TOKEN=<the token printed by runner-token mint for this runner>
 npm run gate -- poll --server http://localhost:3000 --repo /path/to/test-repo
 # or: packages/runner/bin/runstage-gate.js poll --server http://localhost:3000 --repo /path/to/test-repo
 ```
+
+Each runner has its own token. The App identifies the runner from the token (not from any
+header), records which runner claimed each job, and refuses a result or heartbeat from a
+different runner (`403`). While checks run, the runner sends a heartbeat every 60 s. If a
+runner crashes or goes offline, its claim expires after `RUNSTAGE_JOB_LEASE_SECONDS`
+(default 900) and the job goes back to the queue for another runner. Rotate a token by
+minting again with the same `--id`, and revoke it with `npm run -s runner-token -- revoke
+--id my-laptop`. The App re-reads the runners file when it changes, so neither needs a restart.
+
+Jobs live in `RUNSTAGE_QUEUE_FILE` (default `.runstage-gate-data/queue.json`, gitignored), so
+queued and claimed jobs survive an App restart. Duplicate webhooks (same delivery id, or the
+same commit and check run) don't create duplicate jobs.
+
+### Migrating from the shared `RUNSTAGE_RUNNER_TOKEN`
+
+1. On the App machine, mint one token per runner: `npm run -s runner-token -- mint --id <id>`.
+2. On each runner, set `RUNSTAGE_RUNNER_TOKEN` to that runner's new token.
+3. Restart the App. Once `.runstage-gate-data/runners.json` exists, the old shared token is no
+   longer accepted. Until then the App still accepts it as runner `legacy-shared` and logs a
+   warning.
 
 The runner fetches missing PR commits with `git fetch origin <sha>`. Add `--allow-agents`
 only if you want agent checks to run (they also need `agents.enabled: true` in gate.yml and
@@ -130,9 +153,13 @@ Now a failing RunStage Gate blocks the merge button.
 - **401 bad signature**: the webhook secret in `.env` does not match the App settings.
 - **No check appears**: the App is not installed on the repo, or the Checks permission was
   added after install (accept the updated permissions on the installation page).
-- **Check stuck on "Waiting for a runner"**: no runner is polling, or the token differs. The
-  in-memory queue is lost if the App restarts; push again or use **Re-run all checks**
-  (single-check `check_run.rerequested` is not handled yet).
+- **Check stuck on "Waiting for a runner"**: no runner is polling, the runner's token isn't
+  in the runners file (`npm run -s runner-token -- list`), or the runner's `--repo` scope
+  doesn't include this repo. A job claimed by a runner that died is re-queued when its lease
+  expires. Single-check `check_run.rerequested` is not handled yet, so use
+  **Re-run all checks**.
+- **`401 bad runner token`**: the token was rotated or revoked, or it's a legacy shared token
+  and a runners file now exists.
 - **`.runstage/... is not on the base commit`**: the check's script only exists in the PR.
   Scripts are loaded from the base, so merge the script (or the gate change) first.
 - **`commit ... not found`**: the runner's checkout cannot fetch the PR head (e.g. a fork).

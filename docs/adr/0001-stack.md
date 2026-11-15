@@ -26,8 +26,11 @@ on macOS first and Linux too.
   `checks.create` / `checks.update`. The Octokit surface is narrowed to a `ChecksClient`
   interface so tests and the demo never touch the network.
 - **Runner transport: HTTP pull.** Runners call `POST /api/runner/jobs/next` and
-  `POST /api/runner/jobs/:id/result` with a shared bearer token. Pull works behind NAT and
-  laptop firewalls with no inbound ports. The queue is in memory for v1.
+  `POST /api/runner/jobs/:id/result` with a per-runner bearer token (SHA-256 hashes stored
+  in a JSON file). Pull works behind NAT and laptop firewalls with no inbound ports. The
+  queue is a single JSON file rewritten atomically (temp file, fsync, rename), with claim
+  leases and heartbeats. We chose that over `node:sqlite` because the project targets
+  Node 20 (`.nvmrc`), where `node:sqlite` doesn't exist, and the job volume per App is small.
 - **`packages/runner`**: CLI `runstage-gate` with `run` (local dry run) and `poll`. Checks run
   in a throwaway `git worktree` of the PR head so the developer's checkout is never touched.
   The gate config is read from the PR's **base** commit so a PR cannot weaken its own gate.
@@ -41,8 +44,7 @@ on macOS first and Linux too.
 
 - No build step: the runner's `bin` registers tsx at startup. Publishing to npm will need a
   compiled build.
-- Jobs and history are lost on restart until a real database lands.
-- A single shared runner token is fine for one team; multi-tenant needs per-installation
-  runner registration.
-- Check scripts are executed from the PR head, so a PR can edit a script that the base config
-  points to. Pinning scripts to the base commit is a planned hardening step.
+- Queued jobs survive restarts, but the queue file assumes a single App process. Scaling out
+  needs a database behind the `QueueStorage` interface. History is still a stub.
+- Runner tokens are per App; multi-tenant needs per-installation runner registration.
+- Everything under `.runstage/` (config and check scripts) is loaded from the PR's base commit.

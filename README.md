@@ -37,7 +37,7 @@ sequenceDiagram
     App->>App: verify signature (@octokit/webhooks)
     App->>GH: checks.create "RunStage Gate" (in_progress)
     App->>Q: enqueue job {repo, PR, base, head, check id}
-    R->>App: POST /api/runner/jobs/next (bearer runner token)
+    R->>App: POST /api/runner/jobs/next (bearer per-runner token, lease + heartbeats)
     App-->>R: job
     R->>R: git worktree @ head, diff base..head,<br/>run checks from .runstage/ (read at base)
     R->>App: POST /api/runner/jobs/:id/result {conclusion, title, summary, checks}
@@ -133,13 +133,20 @@ See [`examples/gate.yml`](examples/gate.yml) and
   Runs in a temporary git worktree, enforces timeouts, captures output. macOS and Linux.
 - Script checks, and agent checks via installed `claude` / `codex` / custom CLIs (gated by
   config and `--allow-agents`).
+- Per-runner tokens (stored as SHA-256 hashes, optional repo allowlist, minted with
+  `npm run -s runner-token -- mint --id <id>`). Only the runner that claimed a job can
+  complete it.
+- Durable job queue in a single JSON file (atomic writes) that survives restarts, with claim
+  leases plus runner heartbeats (crashed runners' jobs are re-queued) and webhook de-duplication.
 - History stub with `POST /runs` and `GET /runs`, in-memory or a JSON file.
 - Tests for config parsing, gate evaluation, the webhook flow (Octokit mocked), the runner
   against temp git repos, and the history stub. End-to-end demo with `npm run demo`.
 
 **Stubbed or not yet built**
 
-- Job queue is in memory (lost on restart). One shared runner token, no per-team runners.
+- The queue file is meant for one App process. Running several App instances needs a shared
+  database (the `JobStore`/`QueueStorage` interfaces are the seam for that).
+- Runner tokens are per App, not per GitHub installation or team (no multi-tenant isolation).
 - Runs on every PR. Detecting "AI-generated" PRs (labels, bot authors, commit trailers) is
   not built yet.
 - `approvedBy` is always null: approve/override flow not built.
@@ -171,12 +178,13 @@ Against real GitHub (dev App + smee.io + branch protection): see
 ## Repository layout
 
 ```
-apps/github-app     webhook server, GitHub check runs, in-memory job queue, runner API
+apps/github-app     webhook server, GitHub check runs, durable job queue, runner tokens, runner API
 apps/history        hosted history stub (GET /runs)
 packages/core       gate.yml schema (zod + yaml), gate evaluation, shared types, CheckProvider
 packages/runner     runstage-gate CLI (run, poll)
 examples/           gate.yml and the no-todo-in-diff.sh check
 scripts/demo.ts     end-to-end local demo
+scripts/runner-token.ts  mint / rotate / revoke / list per-runner tokens
 docs/               local testing guide, ADRs
 ```
 
