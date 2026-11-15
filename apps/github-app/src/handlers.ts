@@ -1,4 +1,4 @@
-import type { ChangeRef, CheckProvider, GateJob, GateResult } from "@runstage-gate/core";
+import { CHECK_NAME, type ChangeRef, type CheckProvider, type GateJob, type GateResult } from "@runstage-gate/core";
 import type { JobOutcome, JobStore } from "./queue.ts";
 
 export interface HistorySink {
@@ -10,6 +10,8 @@ export interface GateServiceDeps {
   queue: JobStore;
   history?: HistorySink;
   log?: (line: string) => void;
+  /** This GitHub App's id. When set, check_run events for other apps' check runs are ignored. */
+  appId?: number;
 }
 
 /** Minimal shapes of the webhook payloads we read (subset of @octokit/webhooks types). */
@@ -22,6 +24,16 @@ export interface CheckSuitePayload extends RepoPayload {
   action: string;
   check_suite: {
     head_sha: string;
+    pull_requests: Array<{ number: number; base: { sha: string }; head: { sha: string } }>;
+  };
+}
+export interface CheckRunPayload extends RepoPayload {
+  action: string;
+  check_run: {
+    id: number;
+    name: string;
+    head_sha: string;
+    app?: { id: number };
     pull_requests: Array<{ number: number; base: { sha: string }; head: { sha: string } }>;
   };
 }
@@ -57,7 +69,39 @@ export class GateService {
         installationId: p.installation?.id,
         author: p.sender?.login,
       },
-      p.action === "rerequested",
+    );
+  }
+
+  /**
+   * "Re-run" on the RunStage Gate check run. Creates a fresh in-progress check run for the same
+   * commit and queues a new job keyed by it, so it is never de-duplicated against the old,
+   * completed job. Only our own check runs (name, and app id when configured) are handled.
+   */
+  async onCheckRun(p: CheckRunPayload): Promise<GateJob | undefined> {
+    if (p.action !== "rerequested") return undefined;
+    const cr = p.check_run;
+    if (cr.name !== CHECK_NAME) return undefined;
+    if (this.deps.appId !== undefined && cr.app?.id !== this.deps.appId) {
+      this.log(`check_run ${cr.id}: owned by app ${cr.app?.id ?? "?"}, not us, skipping`);
+      return undefined;
+    }
+    const pr = cr.pull_requests.find((x) => x.head.sha === cr.head_sha) ?? cr.pull_requests[0];
+    if (!pr) {
+      this.log(`check_run ${cr.id} ${cr.head_sha.slice(0, 7)}: no pull request (fork?), skipping re-run`);
+      return undefined;
+    }
+    this.log(`check_run ${cr.id} re-run requested by ${p.sender?.login ?? "?"}`);
+    return this.requestGate(
+      {
+        provider: "github",
+        repoFullName: p.repository.full_name,
+        cloneUrl: p.repository.clone_url,
+        headSha: cr.head_sha,
+        baseSha: pr.base.sha,
+        prNumber: pr.number,
+        installationId: p.installation?.id,
+        author: p.sender?.login,
+      },
     );
   }
 
@@ -75,10 +119,14 @@ export class GateService {
     });
   }
 
-  /** Create the in-progress check run and queue a job, unless one is already active for this commit. */
-  async requestGate(change: ChangeRef, force = false): Promise<GateJob | undefined> {
+  /**
+   * Create the in-progress check run and queue a job keyed by it, unless a job for this commit is
+   * still queued or claimed (then that job is reused). Completed jobs never block a new run, so
+   * re-runs always get a fresh check run and job; a crashed runner's claim is re-queued by its lease.
+   */
+  async requestGate(change: ChangeRef): Promise<GateJob | undefined> {
     const active = this.deps.queue.findActive(change.repoFullName, change.headSha);
-    if (active && !force) {
+    if (active) {
       this.log(`${change.repoFullName}@${change.headSha.slice(0, 7)}: job ${active.id} already active`);
       return active;
     }
