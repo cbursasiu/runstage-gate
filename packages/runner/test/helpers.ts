@@ -1,14 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
 
 export interface TempRepo {
   dir: string;
   base: string;
-  commit(files: Record<string, string>, message: string): string;
+  /**
+   * Write (or, with `null`, delete) files and commit them. Paths may be nested.
+   * `executable` lists paths to chmod 755 before committing.
+   */
+  commit(files: Record<string, string | null>, message: string, executable?: string[]): string;
 }
 
 /** A temp git repo whose base commit has .runstage/gate.yml and the example check. */
@@ -33,8 +37,16 @@ export function makeTempRepo(gateYml?: string): TempRepo {
   return {
     dir,
     base,
-    commit(files, message) {
-      for (const [path, content] of Object.entries(files)) writeFileSync(join(dir, path), content);
+    commit(files, message, executable = []) {
+      for (const [path, content] of Object.entries(files)) {
+        if (content === null) {
+          rmSync(join(dir, path), { recursive: true, force: true });
+          continue;
+        }
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), content);
+      }
+      for (const path of executable) chmodSync(join(dir, path), 0o755);
       g("add", "-A");
       g("commit", "-q", "-m", message);
       return g("rev-parse", "HEAD");

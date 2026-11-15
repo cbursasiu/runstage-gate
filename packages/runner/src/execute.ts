@@ -13,13 +13,13 @@ import {
   type GateResult,
   type ScriptCheck,
 } from "@runstage-gate/core";
-import { diffForChange, ensureCommits, git } from "./git.ts";
+import { diffForChange, ensureCommits, git, pathExistsAt } from "./git.ts";
 
 export interface RunOptions {
   repo: string;
   base: string;
   head: string;
-  /** Use this config instead of reading .runstage/gate.yml at the head commit. */
+  /** Use this config instead of reading .runstage/gate.yml at the base commit. Scripts still come from base. */
   configPath?: string;
   /** Runner-side switch: agent checks only run when both this and `agents.enabled` are true. */
   allowAgents?: boolean;
@@ -29,6 +29,13 @@ export interface RunOptions {
 }
 
 const OUTPUT_LIMIT = 8_000;
+
+/**
+ * Everything under this directory is the gate's own code (config, check scripts, helpers).
+ * In the check worktree it is always replaced with the BASE commit's copy, so a PR cannot
+ * rewrite, delete or add to the checks that judge it.
+ */
+export const GATE_DIR = ".runstage";
 
 /**
  * Load the gate config. By default it is read from the *base* commit, so a PR
@@ -57,6 +64,7 @@ export async function runGate(opts: RunOptions): Promise<GateResult> {
   await writeFile(diffFile, diff);
   await git(opts.repo, ["worktree", "add", "--detach", "--quiet", tree, opts.head]);
   try {
+    await pinGateDirToBase(opts.repo, tree, opts.base);
     const results: CheckResult[] = [];
     for (const check of config.checks) {
       log(`▶ ${check.name} (${check.type})`);
@@ -93,7 +101,38 @@ async function runCheck(check: CheckDefinition, config: GateConfig, ctx: CheckCo
   return runAgent(check, config, ctx, env);
 }
 
+/**
+ * Replace `.runstage/` in the head worktree with the base commit's version: the PR's copy is
+ * removed entirely (edits, deletions and new files alike), then the base tree is checked out
+ * with its modes and symlinks. If the base has no `.runstage/`, the directory is simply absent.
+ * The rest of the worktree stays at the PR head, so checks still inspect the PR's code.
+ */
+async function pinGateDirToBase(repo: string, tree: string, base: string): Promise<void> {
+  await rm(join(tree, GATE_DIR), { recursive: true, force: true });
+  if (await pathExistsAt(repo, base, GATE_DIR)) {
+    await git(tree, ["checkout", "--quiet", base, "--", GATE_DIR]);
+  }
+}
+
+/** `.runstage/...` paths named in a check command (e.g. `bash .runstage/checks/x.sh`). */
+export function gatePathsIn(command: string): string[] {
+  const re = /(?:^|[\s'"=:;&|(<>])(?:\.\/)?(\.runstage\/[^\s'";&|()<>$`*?]+)/g;
+  const paths = new Set<string>();
+  for (const m of command.matchAll(re)) paths.add(m[1]!.replace(/\/+$/, ""));
+  return [...paths];
+}
+
 async function runScript(check: ScriptCheck, ctx: CheckContext, env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  for (const path of gatePathsIn(check.run)) {
+    if (!(await pathExistsAt(ctx.repo, ctx.base, path))) {
+      return {
+        name: check.name, kind: "script", required: check.required, status: "error", exitCode: null, durationMs: 0, output: "",
+        reason:
+          `${path} is not on the base commit ${ctx.base.slice(0, 12)}. Check scripts are loaded from the base, ` +
+          "never from the PR head; merge the script to the base branch first.",
+      };
+    }
+  }
   const r = await exec("bash", ["-c", check.run], { cwd: ctx.tree, env, timeoutMs: check.timeout_seconds * 1000 });
   return toResult(check.name, "script", check.required, r);
 }
