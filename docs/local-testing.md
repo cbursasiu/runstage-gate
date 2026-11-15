@@ -76,8 +76,14 @@ cp /path/to/runstage-gate/examples/checks/no-todo-in-diff.sh .runstage/checks/
 git add .runstage && git commit -m "Add RunStage Gate" && git push
 ```
 
-The runner reads `gate.yml` from the PR's **base** commit, so this must be on the default
-branch before you open a test PR.
+The runner reads `gate.yml` **and every file under `.runstage/`** (check scripts and
+anything they source) from the PR's **base** commit, so this must be on the default branch
+before you open a test PR. Changes a PR makes under `.runstage/` don't affect its own run: to
+change a check, merge that change first. If `gate.yml` names a `.runstage/...` script that is
+not on the base, that check ends with an error instead of running the PR's copy. Checks still
+run from the root of a worktree of the PR head, so they see the PR's code; use
+`RUNSTAGE_DIFF_FILE` or `git diff "$RUNSTAGE_BASE" "$RUNSTAGE_HEAD"` rather than
+`git status`, because `.runstage/` in that worktree differs from the head commit.
 
 ## 5. Run the runner
 
@@ -127,5 +133,7 @@ Now a failing RunStage Gate blocks the merge button.
 - **Check stuck on "Waiting for a runner"**: no runner is polling, or the token differs. The
   in-memory queue is lost if the App restarts; push again or use **Re-run all checks**
   (single-check `check_run.rerequested` is not handled yet).
+- **`.runstage/... is not on the base commit`**: the check's script only exists in the PR.
+  Scripts are loaded from the base, so merge the script (or the gate change) first.
 - **`commit ... not found`**: the runner's checkout cannot fetch the PR head (e.g. a fork).
   Fetch it manually: `git fetch origin pull/<n>/head`.
