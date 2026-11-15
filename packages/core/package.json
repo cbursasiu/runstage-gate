@@ -1,0 +1,15 @@
+{
+  "name": "@runstage-gate/core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Gate config schema, evaluation, shared types and the provider interface.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.8.0",
+    "zod": "^3.25.0"
+  }
+}
