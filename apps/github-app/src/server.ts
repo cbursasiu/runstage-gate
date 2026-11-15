@@ -1,15 +1,16 @@
-import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Webhooks } from "@octokit/webhooks";
 import type { GateResult } from "@runstage-gate/core";
 import { GateService, type CheckSuitePayload, type PullRequestPayload } from "./handlers.ts";
-import type { JobQueue } from "./queue.ts";
+import type { JobRefusal, JobStore } from "./queue.ts";
+import type { RunnerRegistry } from "./runners.ts";
 
 export interface AppServerOptions {
   webhookSecret: string;
-  runnerToken: string;
+  /** Registered runners (per-runner tokens, stored as SHA-256 hashes). */
+  runners: RunnerRegistry;
   service: GateService;
-  queue: JobQueue;
+  queue: JobStore;
   log?: (line: string) => void;
 }
 
@@ -29,8 +30,11 @@ export function createWebhooks(secret: string, service: GateService): Webhooks {
 /**
  * HTTP surface:
  *   POST /webhooks                       GitHub webhooks (signature verified)
- *   POST /api/runner/jobs/next           runner claims a job (204 when none)
- *   POST /api/runner/jobs/:id/result     runner posts a GateResult
+ *   POST /api/runner/jobs/next           runner claims a job under a lease (204 when none)
+ *   POST /api/runner/jobs/:id/heartbeat  runner extends its lease while checks run
+ *   POST /api/runner/jobs/:id/result     runner posts a GateResult (only the claiming runner)
+ * Runner calls authenticate with `Authorization: Bearer <per-runner token>`; the runner id comes
+ * from the token, never from a header.
  *   GET  /healthz
  */
 export function createAppServer(opts: AppServerOptions): Server {
@@ -46,33 +50,48 @@ export function createAppServer(opts: AppServerOptions): Server {
         const body = await readBody(req);
         const signature = header(req, "x-hub-signature-256");
         const name = header(req, "x-github-event");
-        const id = header(req, "x-github-delivery") ?? "unknown";
+        const delivery = header(req, "x-github-delivery");
+        const id = delivery ?? "unknown";
         if (!signature || !name) return send(res, 400, { error: "missing GitHub headers" });
         if (!(await webhooks.verify(body, signature))) return send(res, 401, { error: "bad signature" });
+        if (delivery && opts.queue.hasDelivery(delivery)) {
+          log(`webhook ${name} ${id}: duplicate delivery, ignored`);
+          return send(res, 200, { ok: true, duplicate: true });
+        }
         log(`webhook ${name} ${id}`);
         await webhooks.receive({ id, name: name as never, payload: JSON.parse(body) });
+        // Recorded only after handling succeeded, so a failed delivery can be retried.
+        if (delivery) opts.queue.markDelivery(delivery);
         return send(res, 202, { ok: true });
       }
 
       if (url.pathname.startsWith("/api/runner/")) {
-        if (!runnerAuthorized(req, opts.runnerToken)) return send(res, 401, { error: "bad runner token" });
+        const bearer = /^Bearer\s+(.+)$/i.exec(header(req, "authorization") ?? "")?.[1]?.trim();
+        const runner = opts.runners.authenticate(bearer);
+        if (!runner) return send(res, 401, { error: "bad runner token" });
         if (req.method === "POST" && url.pathname === "/api/runner/jobs/next") {
-          const job = opts.queue.claimNext(header(req, "x-runner-id") ?? "unknown-runner");
+          const job = opts.queue.claimNext(runner.id, runner.repos);
           if (!job) {
             res.writeHead(204).end();
             return;
           }
-          log(`runner claimed job ${job.id}`);
+          log(`runner ${runner.id} claimed job ${job.id} (attempt ${job.attempts ?? 1})`);
           return send(res, 200, job);
         }
-        const m = /^\/api\/runner\/jobs\/([^/]+)\/result$/.exec(url.pathname);
+        const m = /^\/api\/runner\/jobs\/([^/]+)\/(result|heartbeat)$/.exec(url.pathname);
         if (req.method === "POST" && m) {
+          const jobId = decodeURIComponent(m[1]!);
+          if (m[2] === "heartbeat") {
+            const hb = opts.queue.heartbeat(jobId, runner.id);
+            if (!hb.ok) return refuse(res, hb.reason);
+            return send(res, 200, { ok: true, leaseExpiresAt: hb.job.leaseExpiresAt });
+          }
           const result = JSON.parse(await readBody(req)) as GateResult;
           if (result.conclusion !== "success" && result.conclusion !== "failure") {
             return send(res, 400, { error: "conclusion must be success or failure" });
           }
-          const job = await opts.service.completeJob(decodeURIComponent(m[1]!), result);
-          if (!job) return send(res, 404, { error: "unknown or already completed job" });
+          const outcome = await opts.service.completeJob(jobId, runner.id, result);
+          if (!outcome.ok) return refuse(res, outcome.reason);
           return send(res, 200, { ok: true });
         }
       }
@@ -84,11 +103,16 @@ export function createAppServer(opts: AppServerOptions): Server {
   });
 }
 
-function runnerAuthorized(req: IncomingMessage, token: string): boolean {
-  const got = (header(req, "authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const a = Buffer.from(got);
-  const b = Buffer.from(token);
-  return token.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+const REFUSALS: Record<JobRefusal, [number, string]> = {
+  not_found: [404, "unknown or already completed job"],
+  already_completed: [404, "unknown or already completed job"],
+  claimed_by_other_runner: [403, "job is claimed by another runner"],
+  not_claimed: [409, "job is not claimed by you (lease expired?)"],
+};
+
+function refuse(res: ServerResponse, reason: JobRefusal): void {
+  const [status, error] = REFUSALS[reason];
+  send(res, status, { error, reason });
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

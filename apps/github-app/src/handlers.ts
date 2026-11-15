@@ -1,5 +1,5 @@
 import type { ChangeRef, CheckProvider, GateJob, GateResult } from "@runstage-gate/core";
-import type { JobQueue } from "./queue.ts";
+import type { JobOutcome, JobStore } from "./queue.ts";
 
 export interface HistorySink {
   record(job: GateJob): Promise<void>;
@@ -7,7 +7,7 @@ export interface HistorySink {
 
 export interface GateServiceDeps {
   provider: CheckProvider;
-  queue: JobQueue;
+  queue: JobStore;
   history?: HistorySink;
   log?: (line: string) => void;
 }
@@ -88,16 +88,20 @@ export class GateService {
     return job;
   }
 
-  /** Called when a runner posts its result. */
-  async completeJob(jobId: string, result: GateResult): Promise<GateJob | undefined> {
-    const job = this.deps.queue.complete(jobId, result);
-    if (!job) return undefined;
+  /** Called when a runner posts its result. Only the runner holding the claim may complete it. */
+  async completeJob(jobId: string, runnerId: string, result: GateResult): Promise<JobOutcome> {
+    const outcome = this.deps.queue.complete(jobId, runnerId, result);
+    if (!outcome.ok) {
+      this.log(`runner ${runnerId} result for job ${jobId} refused: ${outcome.reason}`);
+      return outcome;
+    }
+    const job = outcome.job;
     await this.deps.provider.completeCheck(job.change, job.externalCheckId, result);
     this.log(`completed job ${job.id}: ${result.conclusion} (${result.title})`);
     if (this.deps.history) {
       await this.deps.history.record(job).catch((err) => this.log(`history: ${(err as Error).message}`));
     }
-    return job;
+    return outcome;
   }
 }
 

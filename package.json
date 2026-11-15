@@ -21,7 +21,8 @@
     "demo": "tsx scripts/demo.ts",
     "dev:app": "npm run dev -w @runstage-gate/github-app",
     "dev:history": "npm run dev -w @runstage-gate/history",
-    "gate": "tsx packages/runner/src/cli.ts"
+    "gate": "tsx packages/runner/src/cli.ts",
+    "runner-token": "tsx scripts/runner-token.ts"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

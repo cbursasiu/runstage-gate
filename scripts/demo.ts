@@ -5,14 +5,24 @@
  *   -> App completes the check run (mocked Octokit) -> run lands in the history stub.
  * Round 1 adds a TODO (blocked), round 2 removes it (passes).
  */
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Webhooks } from "@octokit/webhooks";
-import { GateService, GitHubCheckProvider, HttpHistorySink, JobQueue, createAppServer, type ChecksClient } from "../apps/github-app/src/index.ts";
+import {
+  GateService,
+  GitHubCheckProvider,
+  HttpHistorySink,
+  JobQueue,
+  RunnerRegistry,
+  createAppServer,
+  mintRunnerToken,
+  type ChecksClient,
+} from "../apps/github-app/src/index.ts";
 import { RunStore, createHistoryServer } from "../apps/history/src/index.ts";
 import { makeTempRepo } from "../packages/runner/test/helpers.ts";
 
@@ -22,7 +32,9 @@ const step = (s: string) => console.log(`\n${c.bold}${c.cyan}== ${s}${c.reset}`)
 
 // Throwaway, per-run secrets for the demo only.
 const WEBHOOK_SECRET = randomBytes(16).toString("hex");
-const RUNNER_TOKEN = randomBytes(16).toString("hex");
+// Per-runner token and durable queue live in a throwaway data dir for the demo.
+const DATA_DIR = mkdtempSync(join(tmpdir(), "rsg-demo-data-"));
+const RUNNER_TOKEN = mintRunnerToken(join(DATA_DIR, "runners.json"), "demo-runner");
 
 // Mocked GitHub: records what the App would send to the Checks API.
 let nextCheckId = 1000;
@@ -54,14 +66,20 @@ async function main() {
   step("Start history stub and GitHub App server (Octokit mocked)");
   const history = createHistoryServer(new RunStore());
   const historyUrl = await listen(history);
-  const queue = new JobQueue();
+  const queue = JobQueue.file(join(DATA_DIR, "queue.json"));
   const service = new GateService({
     provider: new GitHubCheckProvider(async () => mockGitHub),
     queue,
     history: new HttpHistorySink(historyUrl),
     log: (l) => console.log(`${c.dim}[app] ${l}${c.reset}`),
   });
-  const app = createAppServer({ webhookSecret: WEBHOOK_SECRET, runnerToken: RUNNER_TOKEN, service, queue });
+  const app = createAppServer({
+    webhookSecret: WEBHOOK_SECRET,
+    runners: RunnerRegistry.fromFile(join(DATA_DIR, "runners.json")),
+    service,
+    queue,
+    log: (l) => console.log(`${c.dim}[app] ${l}${c.reset}`),
+  });
   const appUrl = await listen(app);
   console.log(`app ${appUrl}, history ${historyUrl}`);
 
@@ -126,6 +144,7 @@ async function main() {
   console.log(ok ? `${c.green}${c.bold}DEMO OK${c.reset}: blocked the TODO, passed the fix, recorded 2 runs.` : `${c.red}DEMO FAILED${c.reset} ${JSON.stringify(updates)}`);
 
   rmSync(repo.dir, { recursive: true, force: true });
+  rmSync(DATA_DIR, { recursive: true, force: true });
   app.close();
   history.close();
   process.exitCode = ok ? 0 : 1;
