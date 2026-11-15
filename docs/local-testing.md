@@ -42,7 +42,8 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
   - **Contents**: Read-only
   - **Pull requests**: Read-only
   - (Metadata: Read-only is added automatically)
-- **Subscribe to events**: **Check suite**, **Pull request**
+- **Subscribe to events**: **Check suite**, **Check run**, **Pull request**
+  (**Check run** powers the **Re-run** button on the RunStage Gate check)
 - **Where can this App be installed**: Only on this account
 
 After creating it:
@@ -156,8 +157,12 @@ Now a failing RunStage Gate blocks the merge button.
 - **Check stuck on "Waiting for a runner"**: no runner is polling, the runner's token isn't
   in the runners file (`npm run -s runner-token -- list`), or the runner's `--repo` scope
   doesn't include this repo. A job claimed by a runner that died is re-queued when its lease
-  expires. Single-check `check_run.rerequested` is not handled yet, so use
-  **Re-run all checks**.
+  expires. Click **Re-run** on the check (or **Re-run all checks**) to queue a fresh run;
+  for single-check re-runs the App must be subscribed to **Check run** events.
+- **Check says `.runstage/gate.yml not found on the base commit`**: the PR's base branch has
+  no gate config. The App's jobs only use the base commit's config, so merge
+  `.runstage/gate.yml` into the base branch first. (Local `npm run gate -- run` falls back to
+  your working tree with a warning.)
 - **`401 bad runner token`**: the token was rotated or revoked, or it's a legacy shared token
   and a runners file now exists.
 - **`.runstage/... is not on the base commit`**: the check's script only exists in the PR.
