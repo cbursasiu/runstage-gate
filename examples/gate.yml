@@ -1,0 +1,32 @@
+# Example .runstage/gate.yml. Copy it into your repo at .runstage/gate.yml.
+# The runner reads this file from the PR's BASE commit, so a PR cannot weaken its own gate.
+version: 1
+
+agents:
+  # Agent checks are skipped unless this is true AND the runner was started with --allow-agents.
+  enabled: false
+
+checks:
+  # Plain scripts run with bash from the repo root (a clean worktree of the PR head).
+  # Env: RUNSTAGE_BASE, RUNSTAGE_HEAD, RUNSTAGE_DIFF_FILE, RUNSTAGE_REPO, RUNSTAGE_CHECK.
+  - name: no-todo-in-diff
+    type: script
+    run: bash .runstage/checks/no-todo-in-diff.sh
+    timeout_seconds: 30
+
+  - name: unit-tests
+    type: script
+    run: npm test --silent
+    timeout_seconds: 600
+
+  # Agent tasks call a CLI you already have installed and signed in to.
+  # The prompt plus the PR diff go to the agent on stdin; it must end with
+  # "VERDICT: PASS" or "VERDICT: FAIL: <reason>". Optional by default.
+  - name: ai-review
+    type: agent
+    agent: claude-code        # claude-code -> `claude -p`, codex -> `codex exec -`, custom -> set command
+    prompt: |
+      Review this diff for security problems, leaked secrets and obviously broken logic.
+      Ignore style nits.
+    required: false
+    timeout_seconds: 300
