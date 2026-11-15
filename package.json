@@ -1,0 +1,32 @@
+{
+  "name": "runstage-gate",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merge-blocking quality gate for pull requests with AI-generated code. Runs your team's real checks on your own machine.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/runner",
+    "apps/github-app",
+    "apps/history"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "tsx scripts/demo.ts",
+    "dev:app": "npm run dev -w @runstage-gate/github-app",
+    "dev:history": "npm run dev -w @runstage-gate/history",
+    "gate": "tsx packages/runner/src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
