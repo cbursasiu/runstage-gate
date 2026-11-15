@@ -1,0 +1,19 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "draft": false,
+    "head": { "ref": "ai/refactor-auth", "sha": "1111111111111111111111111111111111111111" },
+    "base": { "ref": "main", "sha": "0000000000000000000000000000000000000000" },
+    "user": { "login": "octo-dev" }
+  },
+  "repository": {
+    "id": 9001,
+    "name": "demo-app",
+    "full_name": "acme/demo-app",
+    "clone_url": "https://github.com/acme/demo-app.git"
+  },
+  "installation": { "id": 777 },
+  "sender": { "login": "octo-dev" }
+}

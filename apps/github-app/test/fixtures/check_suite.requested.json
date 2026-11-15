@@ -1,0 +1,24 @@
+{
+  "action": "requested",
+  "check_suite": {
+    "id": 5001,
+    "head_branch": "ai/refactor-auth",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "status": "queued",
+    "pull_requests": [
+      {
+        "number": 42,
+        "head": { "ref": "ai/refactor-auth", "sha": "1111111111111111111111111111111111111111" },
+        "base": { "ref": "main", "sha": "0000000000000000000000000000000000000000" }
+      }
+    ]
+  },
+  "repository": {
+    "id": 9001,
+    "name": "demo-app",
+    "full_name": "acme/demo-app",
+    "clone_url": "https://github.com/acme/demo-app.git"
+  },
+  "installation": { "id": 777 },
+  "sender": { "login": "octo-dev" }
+}
