@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { gatePathsIn, runGate } from "../src/index.ts";
+import { gatePathsIn, poll, runGate } from "../src/index.ts";
 import { makeTempRepo } from "./helpers.ts";
 
 const SCRIPT = ".runstage/checks/no-todo-in-diff.sh";
@@ -92,5 +94,48 @@ describe("gatePathsIn", () => {
     ]);
     expect(gatePathsIn("npm test --silent")).toEqual([]);
     expect(gatePathsIn("bash scripts/x.runstage/y.sh")).toEqual([]);
+  });
+});
+
+describe("gate config must come from the base commit", () => {
+  const noGateRepo = () => {
+    const repo = makeTempRepo();
+    // Base commit without .runstage/gate.yml; the user's working tree still has a gate.yml.
+    const base = repo.commit({ ".runstage/gate.yml": null }, "remove gate from base");
+    writeFileSync(join(repo.dir, ".runstage/gate.yml"), "version: 1\nchecks:\n  - {name: wt, type: script, run: 'echo from working tree'}\n");
+    const head = repo.commit({ "app.js": "export const x = 5;\n" }, "change");
+    writeFileSync(join(repo.dir, ".runstage/gate.yml"), "version: 1\nchecks:\n  - {name: wt, type: script, run: 'echo from working tree'}\n");
+    return { repo, base, head };
+  };
+
+  it("errors clearly by default instead of using the checkout's working tree", async () => {
+    const { repo, base, head } = noGateRepo();
+    await expect(runGate({ repo: repo.dir, base, head })).rejects.toThrow(/\.runstage\/gate\.yml not found on the base commit/);
+  });
+
+  it("local runs can opt in to the working-tree config", async () => {
+    const { repo, base, head } = noGateRepo();
+    const logs: string[] = [];
+    const result = await runGate({ repo: repo.dir, base, head, allowWorkingTreeConfig: true, log: (l) => logs.push(l) });
+    expect(result.checks.map((c) => c.name)).toEqual(["wt"]);
+    expect(logs.join("\n")).toContain("using the working tree");
+  });
+
+  it("poll mode fails the job as a runner error with the reason", async () => {
+    const { repo, base, head } = noGateRepo();
+    const job = {
+      id: "j1", externalCheckId: "1", status: "claimed", createdAt: new Date().toISOString(),
+      change: { provider: "github", repoFullName: "acme/x", headSha: head, baseSha: base, prNumber: 1 },
+    };
+    const posted: Array<{ conclusion: string; title: string; summary: string }> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/jobs/next")) return new Response(JSON.stringify(job), { status: 200 });
+      if (url.endsWith("/result")) posted.push(JSON.parse(String(init!.body)));
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    await poll({ server: "http://x", token: "t", repos: repo.dir, once: true, fetchImpl, log: () => {} });
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ conclusion: "failure", title: "Runner error" });
+    expect(posted[0]!.summary).toContain(".runstage/gate.yml not found on the base commit");
   });
 });

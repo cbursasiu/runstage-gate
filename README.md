@@ -100,6 +100,9 @@ checks:
   `VERDICT: FAIL: <reason>`.
 - The gate fails if any **required** check fails, errors or times out, or if nothing ran.
 - The config is read from the PR's **base** commit, so a PR can't switch off its own gate.
+  If the base has no `.runstage/gate.yml`, jobs from the App fail with a clear error (the
+  runner never uses its checkout's working tree). A local `runstage-gate run` falls back to
+  the working-tree `gate.yml` with a warning, which is handy while drafting a gate.
 - The whole `.runstage/` directory (config, check scripts, helpers they source) is also
   taken from the **base** commit: in the check worktree it replaces the PR's copy, while the
   rest of the tree stays at the PR head. A PR that edits, deletes or adds files under
@@ -126,7 +129,9 @@ See [`examples/gate.yml`](examples/gate.yml) and
 **Works now**
 
 - GitHub App webhook server with signature verification for `check_suite`
-  (`requested`, `rerequested`) and `pull_request` (`opened`, `synchronize`, `reopened`).
+  (`requested`, `rerequested`), `check_run` (`rerequested`: the **Re-run** button on the
+  `RunStage Gate` check) and `pull_request` (`opened`, `synchronize`, `reopened`). A re-run
+  gets a fresh check run and job; it is never de-duplicated against the finished one.
 - Creates an in-progress `RunStage Gate` check run, de-duplicates events for the same
   commit, and completes it with `success`/`failure` plus a markdown summary.
 - Runner CLI: `run` (local dry run, exit 0/1/2) and `poll` (claim job, run, post result).
@@ -151,7 +156,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
   not built yet.
 - `approvedBy` is always null: approve/override flow not built.
 - History has no auth on reads, no multi-tenant isolation and no UI.
-- No `check_run.rerequested` handling (use "Re-run all checks").
+- `check_run.requested_action` (custom check-run buttons) is not handled.
 - No compiled build or npm publish; the runner runs through `tsx`.
 - No GitLab provider yet (interface is ready).
 

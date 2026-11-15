@@ -47,6 +47,7 @@ if (existsSync(runnersFile)) {
 const service = new GateService({
   provider: new GitHubCheckProvider(async (id) => (await app.getInstallationOctokit(id)) as unknown as ChecksClient),
   queue,
+  appId: Number(env("GITHUB_APP_ID")),
   history: process.env.RUNSTAGE_HISTORY_URL
     ? new HttpHistorySink(process.env.RUNSTAGE_HISTORY_URL, process.env.RUNSTAGE_HISTORY_TOKEN)
     : undefined,

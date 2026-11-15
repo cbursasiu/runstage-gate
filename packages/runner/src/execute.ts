@@ -23,6 +23,11 @@ export interface RunOptions {
   configPath?: string;
   /** Runner-side switch: agent checks only run when both this and `agents.enabled` are true. */
   allowAgents?: boolean;
+  /**
+   * Local `run` only: if the base commit has no .runstage/gate.yml, read it from the checkout's
+   * working tree instead of failing. Never set for jobs from the App (poll mode).
+   */
+  allowWorkingTreeConfig?: boolean;
   /** Try `git fetch origin <sha>` for missing commits. */
   fetch?: boolean;
   log?: (line: string) => void;
@@ -38,16 +43,25 @@ const OUTPUT_LIMIT = 8_000;
 export const GATE_DIR = ".runstage";
 
 /**
- * Load the gate config. By default it is read from the *base* commit, so a PR
- * cannot weaken its own gate. Falls back to the working tree when absent there.
+ * Load the gate config from the *base* commit, so a PR cannot weaken its own gate. If the base
+ * has none, that is an error, unless a local run opted in with `allowWorkingTreeConfig`.
  */
 export async function loadConfig(opts: RunOptions): Promise<GateConfig> {
   if (opts.configPath) return parseGateConfig(await readFile(opts.configPath, "utf8"));
+  let text: string | undefined;
   try {
-    return parseGateConfig(await git(opts.repo, ["show", `${opts.base}:${GATE_CONFIG_PATH}`]));
-  } catch (err) {
-    if ((err as Error).name === "GateConfigError") throw err;
+    text = await git(opts.repo, ["show", `${opts.base}:${GATE_CONFIG_PATH}`]);
+  } catch {
+    text = undefined; // not on the base commit
   }
+  if (text !== undefined) return parseGateConfig(text);
+  if (!opts.allowWorkingTreeConfig) {
+    throw new Error(
+      `${GATE_CONFIG_PATH} not found on the base commit ${opts.base.slice(0, 12)}. RunStage Gate reads its config ` +
+        "from the PR's base branch only; merge .runstage/gate.yml into the base branch first.",
+    );
+  }
+  opts.log?.(`! ${GATE_CONFIG_PATH} is not on the base commit; using the working tree copy (local run only)`);
   return parseGateConfig(await readFile(join(opts.repo, GATE_CONFIG_PATH), "utf8"));
 }
 
