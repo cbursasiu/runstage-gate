@@ -1,22 +1,31 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GateResult } from "@runstage-gate/core";
-import { GateService, GitHubCheckProvider, JobQueue, createAppServer } from "../src/index.ts";
+import { GateService, GitHubCheckProvider, JobQueue, RunnerRegistry, createAppServer, hashToken } from "../src/index.ts";
 import { listen, mockChecksClient, sendWebhook } from "./helpers.ts";
 
 const SECRET = "test-webhook-secret";
 const RUNNER_TOKEN = "test-runner-token";
+const OTHER_TOKEN = "test-other-runner-token";
+const SCOPED_TOKEN = "test-scoped-runner-token";
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"));
 
 let server: Server | undefined;
 afterEach(() => server?.close());
 
-async function setup() {
+const runners = RunnerRegistry.fromEntries([
+  { id: "runner-a", tokenSha256: hashToken(RUNNER_TOKEN) },
+  { id: "runner-b", tokenSha256: hashToken(OTHER_TOKEN) },
+  { id: "runner-scoped", tokenSha256: hashToken(SCOPED_TOKEN), repos: ["acme/other-repo"] },
+]);
+
+async function setup(queue = new JobQueue()) {
   const gh = mockChecksClient();
-  const queue = new JobQueue();
   const service = new GateService({ provider: new GitHubCheckProvider(gh.factory), queue });
-  server = createAppServer({ webhookSecret: SECRET, runnerToken: RUNNER_TOKEN, service, queue });
+  server = createAppServer({ webhookSecret: SECRET, runners, service, queue });
   const url = await listen(server);
   const runner = (path: string, body: unknown = {}, token = RUNNER_TOKEN) =>
     fetch(`${url}${path}`, {
@@ -108,8 +117,71 @@ describe("GitHub webhook handling", () => {
     expect((await runner(`/api/runner/jobs/${job.id}/result`, result)).status).toBe(404);
   });
 
-  it("requires the runner token", async () => {
+  it("requires a registered runner token", async () => {
     const { runner } = await setup();
     expect((await runner("/api/runner/jobs/next", {}, "wrong")).status).toBe(401);
+    expect((await runner("/api/runner/jobs/next", {}, "")).status).toBe(401);
+  });
+});
+
+describe("per-runner tokens and the durable queue", () => {
+  it("records the claiming runner from its token and rejects another runner's result", async () => {
+    const { gh, queue, url, runner } = await setup();
+    await sendWebhook(url, SECRET, "pull_request", fixture("pull_request.opened"));
+    // a spoofed x-runner-id header does not change who claimed it: identity comes from the token
+    const claim = await fetch(`${url}/api/runner/jobs/next`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${RUNNER_TOKEN}`, "x-runner-id": "runner-b" },
+      body: "{}",
+    });
+    const job = (await claim.json()) as { id: string; runnerId: string; leaseExpiresAt: string };
+    expect(job).toMatchObject({ runnerId: "runner-a", status: "claimed" });
+    expect(job.leaseExpiresAt).toBeTruthy();
+
+    const stolen = await runner(`/api/runner/jobs/${job.id}/result`, passing, OTHER_TOKEN);
+    expect(stolen.status).toBe(403);
+    expect((await runner(`/api/runner/jobs/${job.id}/heartbeat`, {}, OTHER_TOKEN)).status).toBe(403);
+    expect(gh.update).not.toHaveBeenCalled();
+
+    expect((await runner(`/api/runner/jobs/${job.id}/heartbeat`)).status).toBe(200);
+    expect((await runner(`/api/runner/jobs/${job.id}/result`, passing)).status).toBe(200);
+    expect(queue.get(job.id)).toMatchObject({ status: "completed", runnerId: "runner-a" });
+  });
+
+  it("a repo-scoped runner only gets jobs for its repos", async () => {
+    const { url, runner } = await setup();
+    await sendWebhook(url, SECRET, "pull_request", fixture("pull_request.opened")); // acme/demo-app
+    expect((await runner("/api/runner/jobs/next", {}, SCOPED_TOKEN)).status).toBe(204);
+    expect((await runner("/api/runner/jobs/next", {}, RUNNER_TOKEN)).status).toBe(200);
+  });
+
+  it("ignores a redelivered webhook (same delivery id), even after the job completed", async () => {
+    const { gh, queue, url, runner } = await setup();
+    const payload = fixture("pull_request.opened");
+    const deliver = () =>
+      sendWebhook(url, SECRET, "pull_request", payload, undefined, "delivery-123");
+    expect((await deliver()).status).toBe(202);
+    const job = (await (await runner("/api/runner/jobs/next")).json()) as { id: string };
+    await runner(`/api/runner/jobs/${job.id}/result`, passing);
+    const again = await deliver();
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ duplicate: true });
+    expect(gh.create).toHaveBeenCalledTimes(1);
+    expect(queue.list()).toHaveLength(1);
+  });
+
+  it("keeps queued jobs across an App restart", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "rsg-app-")), "queue.json");
+    const first = await setup(JobQueue.file(file));
+    await sendWebhook(first.url, SECRET, "pull_request", fixture("pull_request.opened"));
+    server!.close();
+
+    const second = await setup(JobQueue.file(file)); // new process, same file
+    const claim = await second.runner("/api/runner/jobs/next");
+    expect(claim.status).toBe(200);
+    const job = (await claim.json()) as { id: string; externalCheckId: string };
+    expect(job.externalCheckId).toBe("314");
+    expect((await second.runner(`/api/runner/jobs/${job.id}/result`, failing)).status).toBe(200);
+    expect(second.gh.update.mock.calls[0]![0]).toMatchObject({ check_run_id: 314, conclusion: "failure" });
   });
 });

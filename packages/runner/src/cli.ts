@@ -12,7 +12,8 @@ Usage:
 run   Local dry run: evaluates the gate for base..head and prints the verdict.
       Exit code 0 = pass, 1 = blocked, 2 = usage/config error.
 poll  Fetches jobs from the RunStage Gate server, runs them and posts results.
-      The token defaults to $RUNSTAGE_RUNNER_TOKEN.
+      The token (this runner's own, from \`npm run -s runner-token -- mint\`)
+      defaults to $RUNSTAGE_RUNNER_TOKEN.
 `;
 
 export async function main(argv: string[]): Promise<number> {

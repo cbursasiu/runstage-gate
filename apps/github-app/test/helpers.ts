@@ -17,7 +17,7 @@ export async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-export async function sendWebhook(url: string, secret: string, event: string, payload: unknown, signature?: string) {
+export async function sendWebhook(url: string, secret: string, event: string, payload: unknown, signature?: string, deliveryId?: string) {
   const body = JSON.stringify(payload);
   const sig = signature ?? (await new Webhooks({ secret }).sign(body));
   return fetch(`${url}/webhooks`, {
@@ -25,7 +25,7 @@ export async function sendWebhook(url: string, secret: string, event: string, pa
     headers: {
       "content-type": "application/json",
       "x-github-event": event,
-      "x-github-delivery": `test-${Math.random()}`,
+      "x-github-delivery": deliveryId ?? `test-${Math.random()}`,
       "x-hub-signature-256": sig,
     },
     body,

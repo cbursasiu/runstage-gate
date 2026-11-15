@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { App } from "@octokit/app";
 import { GitHubCheckProvider, type ChecksClient } from "./github-provider.ts";
 import { GateService, HttpHistorySink } from "./handlers.ts";
 import { JobQueue } from "./queue.ts";
+import { RunnerRegistry, hashToken } from "./runners.ts";
 import { createAppServer } from "./server.ts";
 
 function env(name: string): string {
@@ -20,8 +21,29 @@ const app = new App({
   webhooks: { secret: env("GITHUB_WEBHOOK_SECRET") },
 });
 
-const queue = new JobQueue();
 const log = (l: string) => console.log(`[app] ${l}`);
+
+// Durable queue: one JSON file, rewritten atomically. Survives restarts; claims have a lease.
+const queueFile = process.env.RUNSTAGE_QUEUE_FILE ?? ".runstage-gate-data/queue.json";
+const leaseSeconds = Number(process.env.RUNSTAGE_JOB_LEASE_SECONDS ?? 900);
+if (!Number.isFinite(leaseSeconds) || leaseSeconds < 30) {
+  console.error("RUNSTAGE_JOB_LEASE_SECONDS must be a number >= 30");
+  process.exit(2);
+}
+const queue = JobQueue.file(queueFile, { leaseMs: leaseSeconds * 1000 });
+
+// Per-runner tokens: a JSON file of runner ids and SHA-256 token hashes (npm run -s runner-token -- mint --id <id>).
+const runnersFile = process.env.RUNSTAGE_RUNNERS_FILE ?? ".runstage-gate-data/runners.json";
+let runners: RunnerRegistry;
+if (existsSync(runnersFile)) {
+  runners = RunnerRegistry.fromFile(runnersFile);
+} else if (process.env.RUNSTAGE_RUNNER_TOKEN) {
+  log("WARNING: using the legacy shared RUNSTAGE_RUNNER_TOKEN as runner 'legacy-shared'. Mint per-runner tokens (see docs/local-testing.md).");
+  runners = RunnerRegistry.fromEntries([{ id: "legacy-shared", tokenSha256: hashToken(process.env.RUNSTAGE_RUNNER_TOKEN) }]);
+} else {
+  console.error(`no runners registered: ${runnersFile} not found. Run: npm run -s runner-token -- mint --id <runner-id>`);
+  process.exit(2);
+}
 const service = new GateService({
   provider: new GitHubCheckProvider(async (id) => (await app.getInstallationOctokit(id)) as unknown as ChecksClient),
   queue,
@@ -34,8 +56,10 @@ const service = new GateService({
 const port = Number(process.env.PORT ?? 3000);
 createAppServer({
   webhookSecret: env("GITHUB_WEBHOOK_SECRET"),
-  runnerToken: env("RUNSTAGE_RUNNER_TOKEN"),
+  runners,
   service,
   queue,
   log,
-}).listen(port, () => log(`RunStage Gate App listening on :${port} (POST /webhooks)`));
+}).listen(port, () =>
+  log(`RunStage Gate App listening on :${port} (POST /webhooks); queue ${queueFile}, ${runners.list().length} runner(s), lease ${leaseSeconds}s`),
+);

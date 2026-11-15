@@ -10,8 +10,13 @@ export interface PollOptions {
   allowAgents?: boolean;
   once?: boolean;
   intervalMs?: number;
+  /** How often to extend the job's lease while checks run. Default 60s. */
+  heartbeatMs?: number;
+  /** Informational only: the server identifies the runner by its token. */
   runnerId?: string;
   fetchImpl?: typeof fetch;
+  /** Test seam: defaults to runGate. */
+  runGateImpl?: typeof runGate;
   log?: (line: string) => void;
   signal?: AbortSignal;
 }
@@ -37,13 +42,22 @@ export async function poll(opts: PollOptions): Promise<number> {
     const job = (await res.json()) as GateJob;
     log(`job ${job.id}: ${job.change.repoFullName}#${job.change.prNumber ?? "?"} ${job.change.headSha.slice(0, 7)}`);
 
+    // Keep the claim alive while checks run; if the lease lapses the server re-queues the job.
+    const heartbeat = setInterval(() => {
+      f(`${server}/api/runner/jobs/${encodeURIComponent(job.id)}/heartbeat`, { method: "POST", headers, body: "{}" })
+        .then((r) => {
+          if (!r.ok) log(`job ${job.id}: heartbeat refused (${r.status})`);
+        })
+        .catch((err: Error) => log(`job ${job.id}: heartbeat failed: ${err.message}`));
+    }, opts.heartbeatMs ?? 60_000);
+
     let result: GateResult;
     const repo = typeof opts.repos === "string" ? opts.repos : opts.repos[job.change.repoFullName];
     if (!repo) {
       result = errorResult(`runner has no local checkout for ${job.change.repoFullName}`);
     } else {
       try {
-        result = await runGate({
+        result = await (opts.runGateImpl ?? runGate)({
           repo,
           base: job.change.baseSha,
           head: job.change.headSha,
@@ -55,13 +69,20 @@ export async function poll(opts: PollOptions): Promise<number> {
         result = errorResult((err as Error).message);
       }
     }
+    clearInterval(heartbeat);
     log(`job ${job.id}: ${result.conclusion} - ${result.title}`);
     const post = await f(`${server}/api/runner/jobs/${encodeURIComponent(job.id)}/result`, {
       method: "POST",
       headers,
       body: JSON.stringify(result),
     });
-    if (!post.ok) throw new Error(`posting result failed ${post.status}: ${await post.text()}`);
+    if (post.status === 401) throw new Error("server rejected the runner token");
+    if ([403, 404, 409].includes(post.status)) {
+      // The lease lapsed and another runner took the job, or it was already finished: not fatal.
+      log(`job ${job.id}: server refused the result (${post.status}): ${await post.text()}`);
+    } else if (!post.ok) {
+      throw new Error(`posting result failed ${post.status}: ${await post.text()}`);
+    }
     processed++;
     if (opts.once) return processed;
   }
