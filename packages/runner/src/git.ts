@@ -45,3 +45,13 @@ export async function diffForChange(repo: string, base: string, head: string): P
   }
   return git(repo, ["diff", "--no-color", "--no-ext-diff", from, head]);
 }
+
+/** True if `path` (a file, dir or symlink) exists in the tree of `commit`. */
+export async function pathExistsAt(repo: string, commit: string, path: string): Promise<boolean> {
+  try {
+    await git(repo, ["cat-file", "-e", `${commit}:${path}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}

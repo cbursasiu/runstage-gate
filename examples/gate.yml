@@ -1,5 +1,6 @@
 # Example .runstage/gate.yml. Copy it into your repo at .runstage/gate.yml.
-# The runner reads this file from the PR's BASE commit, so a PR cannot weaken its own gate.
+# The runner reads this file, and everything else under .runstage/ (check scripts), from the
+# PR's BASE commit, so a PR cannot weaken or rewrite its own gate.
 version: 1
 
 agents:
@@ -7,7 +8,8 @@ agents:
   enabled: false
 
 checks:
-  # Plain scripts run with bash from the repo root (a clean worktree of the PR head).
+  # Plain scripts run with bash from the repo root (a clean worktree of the PR head, with
+  # .runstage/ swapped for the base commit's copy).
   # Env: RUNSTAGE_BASE, RUNSTAGE_HEAD, RUNSTAGE_DIFF_FILE, RUNSTAGE_REPO, RUNSTAGE_CHECK.
   - name: no-todo-in-diff
     type: script

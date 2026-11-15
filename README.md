@@ -39,7 +39,7 @@ sequenceDiagram
     App->>Q: enqueue job {repo, PR, base, head, check id}
     R->>App: POST /api/runner/jobs/next (bearer runner token)
     App-->>R: job
-    R->>R: git worktree @ head, diff base..head,<br/>run checks from .runstage/gate.yml (read at base)
+    R->>R: git worktree @ head, diff base..head,<br/>run checks from .runstage/ (read at base)
     R->>App: POST /api/runner/jobs/:id/result {conclusion, title, summary, checks}
     App->>GH: checks.update completed success|failure + summary
     App->>H: POST /runs (what ran, results, why)
@@ -100,6 +100,13 @@ checks:
   `VERDICT: FAIL: <reason>`.
 - The gate fails if any **required** check fails, errors or times out, or if nothing ran.
 - The config is read from the PR's **base** commit, so a PR can't switch off its own gate.
+- The whole `.runstage/` directory (config, check scripts, helpers they source) is also
+  taken from the **base** commit: in the check worktree it replaces the PR's copy, while the
+  rest of the tree stays at the PR head. A PR that edits, deletes or adds files under
+  `.runstage/` is still judged by the base versions. A check whose `.runstage/...` script is
+  not on the base errors (it never falls back to the PR's copy), and checks added only in the
+  PR's `gate.yml` run after it merges. Keep gate scripts under `.runstage/`: commands outside
+  it (e.g. `npm test`) run the PR's own code by design.
 
 See [`examples/gate.yml`](examples/gate.yml) and
 [`examples/checks/no-todo-in-diff.sh`](examples/checks/no-todo-in-diff.sh).
@@ -138,8 +145,6 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - `approvedBy` is always null: approve/override flow not built.
 - History has no auth on reads, no multi-tenant isolation and no UI.
 - No `check_run.rerequested` handling (use "Re-run all checks").
-- Check scripts come from the PR head (config comes from base); pinning scripts to base is
-  planned.
 - No compiled build or npm publish; the runner runs through `tsx`.
 - No GitLab provider yet (interface is ready).
 
