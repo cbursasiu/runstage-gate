@@ -10,6 +10,8 @@ Usage:
   runstage-gate poll --server <url> --repo <path> [--token <t>] [--allow-agents] [--once] [--interval <sec>]
 
 run   Local dry run: evaluates the gate for base..head and prints the verdict.
+      Config comes from the base commit; if it has none, the working tree's
+      .runstage/gate.yml is used with a warning (poll mode never does this).
       Exit code 0 = pass, 1 = blocked, 2 = usage/config error.
 poll  Fetches jobs from the RunStage Gate server, runs them and posts results.
       The token (this runner's own, from \`npm run -s runner-token -- mint\`)
@@ -47,6 +49,8 @@ export async function main(argv: string[]): Promise<number> {
         base: values.base,
         head: values.head,
         configPath: values.config ? resolve(values.config) : undefined,
+        // Local dry runs may use the working-tree gate.yml if the base has none (with a warning).
+        allowWorkingTreeConfig: true,
         allowAgents: values["allow-agents"],
         log: values.json ? undefined : (l) => console.log(l),
       });
