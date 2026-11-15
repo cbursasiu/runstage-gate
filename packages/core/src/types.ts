@@ -48,9 +48,13 @@ export interface GateJob {
   change: ChangeRef;
   /** Provider-specific id of the in-progress check (GitHub check run id). */
   externalCheckId: string;
-  status: "queued" | "running" | "completed";
+  status: "queued" | "claimed" | "completed";
   createdAt: string;
   claimedAt?: string;
+  /** While claimed: when the claim lapses and the job goes back to the queue unless the runner heartbeats. */
+  leaseExpiresAt?: string;
+  /** How many times a runner has claimed this job. */
+  attempts?: number;
   completedAt?: string;
   runnerId?: string;
   result?: GateResult;
