@@ -150,9 +150,27 @@ pre.output, pre.diff {
 .check-out h3 { font-size: 13px; margin: 0 0 6px; }
 .links { display: flex; flex-wrap: wrap; gap: 12px; }
 .back { margin: 0 0 16px; }
+.signout { float: right; margin: 0; }
+.signout button, .login button {
+  font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #d0d7de;
+  background: #f6f8fa; color: #1f2328; cursor: pointer;
+}
+.login { max-width: 360px; margin: 48px auto; padding: 20px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; }
+.login label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #656d76; margin: 0 0 12px; }
+.login input { font: inherit; padding: 6px 8px; border: 1px solid #d0d7de; border-radius: 6px; }
+.login .error { color: #b42318; margin: 0 0 12px; }
 `.trim();
 
-function layout(title: string, body: string): string {
+/** Per-request page chrome. */
+export type PageOptions = { signOut?: boolean };
+
+function signOutForm(opts: PageOptions): string {
+  return opts.signOut
+    ? `<form class="signout" method="post" action="/logout"><button type="submit">Sign out</button></form>`
+    : "";
+}
+
+function layout(title: string, body: string, opts: PageOptions = {}): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -163,6 +181,7 @@ function layout(title: string, body: string): string {
 </head>
 <body>
   <header>
+    ${signOutForm(opts)}
     <h1><a href="/">RunStage Gate</a></h1>
     <p>Run history</p>
   </header>
@@ -176,7 +195,7 @@ ${body}
 
 export type ListFilters = { repo?: string; verdict?: string };
 
-export function renderListPage(runs: RunRecord[], filters: ListFilters = {}): string {
+export function renderListPage(runs: RunRecord[], filters: ListFilters = {}, opts: PageOptions = {}): string {
   const repoValue = escapeHtml(filters.repo ?? "");
   const verdict = filters.verdict === "success" || filters.verdict === "failure" ? filters.verdict : "";
   const rows = runs
@@ -232,7 +251,7 @@ ${rows}
     </form>
 ${table}`;
 
-  return layout("Run history · RunStage Gate", body);
+  return layout("Run history · RunStage Gate", body, opts);
 }
 
 function checkRow(check: CheckResult): string {
@@ -260,7 +279,7 @@ function failingOutputs(run: RunRecord): string {
     .join("\n");
 }
 
-export function renderDetailPage(run: RunRecord): string {
+export function renderDetailPage(run: RunRecord, opts: PageOptions = {}): string {
   const prLabel = run.prNumber != null ? `#${run.prNumber}` : "—";
   const compare = githubCompareUrl(run.repoFullName, run.baseSha, run.headSha);
   const files = run.prNumber != null ? githubFilesUrl(run.repoFullName, run.prNumber) : undefined;
@@ -323,14 +342,30 @@ ${failingOutputs(run)}
     </section>
 ${diffSection}`;
 
-  return layout(title, body);
+  return layout(title, body, opts);
 }
 
-export function renderNotFoundPage(): string {
+export function renderNotFoundPage(opts: PageOptions = {}): string {
   return layout(
     "Run not found · RunStage Gate",
     `    <p class="back">${link("/", "← All runs")}</p>
     <p class="empty">Run not found.</p>`,
+    opts,
+  );
+}
+
+export function renderLoginPage(next: string, error?: string): string {
+  return layout(
+    "Sign in · RunStage Gate",
+    `    <form class="login" method="post" action="/login">
+      <h2>Sign in</h2>
+      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+      <label>History access token
+        <input type="password" name="token" autocomplete="current-password" required autofocus>
+      </label>
+      <input type="hidden" name="next" value="${escapeHtml(next)}">
+      <button type="submit">Sign in</button>
+    </form>`,
   );
 }
 
