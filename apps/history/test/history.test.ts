@@ -361,3 +361,31 @@ describe("history hardening (PR #7 review)", () => {
     }
   });
 });
+
+describe("history AI-generated field", () => {
+  it("stores and shows the AI verdict and signals (escaped), and accepts policy checks", async () => {
+    const store = new RunStore();
+    const { server, url } = await listen(store);
+    try {
+      const res = await fetch(`${url}/runs`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...sampleRun(),
+          aiGenerated: true,
+          aiSignals: ['branch "cursor/x" starts with "cursor/"', "<b>x</b>", 5],
+          checks: [sampleCheck({ name: "ai-approval", kind: "policy" as never })],
+        }),
+      });
+      const saved = (await res.json()) as RunRecord;
+      expect(saved.aiGenerated).toBe(true);
+      expect(saved.aiSignals).toEqual(['branch "cursor/x" starts with "cursor/"', "<b>x</b>"]);
+      expect(saved.checks[0]!.kind).toBe("policy");
+      const html = await (await fetch(`${url}/runs/${saved.id}`, { headers: HTML })).text();
+      expect(html).toContain("AI-generated</dt><dd>yes");
+      expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
+      expect(html).not.toContain("<b>x</b>");
+    } finally {
+      server.close();
+    }
+  });
+});

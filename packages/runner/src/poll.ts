@@ -62,6 +62,7 @@ export async function poll(opts: PollOptions): Promise<number> {
           base: job.change.baseSha,
           head: job.change.headSha,
           allowAgents: opts.allowAgents,
+          change: job.change,
           // Jobs from the App must use the base commit's gate.yml; never the checkout's working tree.
           allowWorkingTreeConfig: false,
           fetch: true,

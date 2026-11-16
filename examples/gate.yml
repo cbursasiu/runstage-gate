@@ -10,7 +10,8 @@ agents:
 checks:
   # Plain scripts run with bash from the repo root (a clean worktree of the PR head, with
   # .runstage/ swapped for the base commit's copy).
-  # Env: RUNSTAGE_BASE, RUNSTAGE_HEAD, RUNSTAGE_DIFF_FILE, RUNSTAGE_REPO, RUNSTAGE_CHECK.
+  # Env: RUNSTAGE_BASE, RUNSTAGE_HEAD, RUNSTAGE_DIFF_FILE, RUNSTAGE_REPO, RUNSTAGE_CHECK,
+  # RUNSTAGE_AI_GENERATED (1/0) and RUNSTAGE_AI_SIGNALS (one reason per line).
   - name: no-todo-in-diff
     type: script
     run: bash .runstage/checks/no-todo-in-diff.sh
@@ -32,3 +33,13 @@ checks:
       Ignore style nits.
     required: false
     timeout_seconds: 300
+
+# Optional: detect AI-generated changes (docs/ai-detection.md). Off unless enabled.
+# ai_detection:
+#   enabled: true
+#   branch_prefixes: [cursor/, codex/, copilot/, claude/, devin/, ai/]   # defaults
+#   labels: [ai-generated, ai-assisted, generated-by-ai]                  # defaults
+#   markers: ["written with our assistant"]                              # extra phrases
+#   policy:
+#     require_checks: [unit-tests]    # required (and must run) when AI-generated
+#     require_approval: false         # true: AI-generated changes need an approval to pass

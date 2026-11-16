@@ -153,8 +153,8 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - The queue file is meant for one App process. Running several App instances needs a shared
   database (the `JobStore`/`QueueStorage` interfaces are the seam for that).
 - Runner tokens are per App, not per GitHub installation or team (no multi-tenant isolation).
-- Runs on every PR. Detecting "AI-generated" PRs (labels, bot authors, commit trailers) is
-  not built yet.
+- AI-generated detection is heuristic (branch prefixes, labels, commit trailers, generator
+  markers; see [docs/ai-detection.md](docs/ai-detection.md)) and off unless enabled in gate.yml.
 - Approvals: an **Approve override** check-run button or a `/runstage approve` PR comment by a
   user with write access (see [docs/approvals.md](docs/approvals.md)). Refusals are only logged.
 - History has single-tenant token auth only (no users, roles or multi-tenant isolation).

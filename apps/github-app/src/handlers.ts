@@ -69,6 +69,7 @@ export interface CheckSuitePayload extends RepoPayload {
   action: string;
   check_suite: {
     head_sha: string;
+    head_branch?: string | null;
     pull_requests: Array<{ number: number; base: { sha: string }; head: { sha: string } }>;
   };
 }
@@ -93,7 +94,16 @@ export interface IssueCommentPayload extends RepoPayload {
 export interface PullRequestPayload extends RepoPayload {
   action: string;
   number: number;
-  pull_request: { number: number; draft?: boolean; base: { sha: string }; head: { sha: string }; user?: { login: string } };
+  pull_request: {
+    number: number;
+    draft?: boolean;
+    title?: string;
+    body?: string | null;
+    labels?: Array<{ name: string }>;
+    base: { sha: string };
+    head: { sha: string; ref?: string };
+    user?: { login: string };
+  };
 }
 
 /** Provider-neutral orchestration: start a check, queue a job, finish the check. */
@@ -128,6 +138,7 @@ export class GateService {
         prNumber: pr.number,
         installationId: p.installation?.id,
         author: p.sender?.login,
+        ...(p.check_suite.head_branch ? { pr: { headRef: p.check_suite.head_branch } } : {}),
       },
     );
   }
@@ -181,6 +192,7 @@ export class GateService {
       prNumber: p.pull_request.number,
       installationId: p.installation?.id,
       author: p.pull_request.user?.login ?? p.sender?.login,
+      pr: prMeta(p.pull_request),
     });
   }
 
@@ -198,12 +210,12 @@ export class GateService {
     if (pending) {
       const job = await pending;
       this.log(`${change.repoFullName}@${change.headSha.slice(0, 7)}: job ${job.id} already active`);
-      return job;
+      return this.mergeChangeInfo(job, change);
     }
     const active = this.deps.queue.findActive(change.repoFullName, change.headSha);
     if (active) {
       this.log(`${change.repoFullName}@${change.headSha.slice(0, 7)}: job ${active.id} already active`);
-      return active;
+      return this.mergeChangeInfo(active, change);
     }
     const work = this.startAndEnqueue(change).finally(() => {
       this.inFlight.delete(key);
@@ -237,6 +249,16 @@ export class GateService {
     return outcome;
   }
   private retrying = false;
+
+  /**
+   * check_suite often creates the job before pull_request arrives; pull_request carries the PR
+   * author, labels and body that AI detection needs. Merge them into a job no runner has claimed yet.
+   */
+  private mergeChangeInfo(job: GateJob, change: ChangeRef): GateJob {
+    if (job.status !== "queued" || (!change.pr && !change.author)) return job;
+    const pr = { ...job.change.pr, ...change.pr };
+    return this.deps.queue.updateChange(job.id, { pr, ...(change.pr && change.author ? { author: change.author } : {}) }) ?? job;
+  }
 
   /** "Approve override" button on a failed RunStage Gate check run. */
   async onApproveButton(p: CheckRunPayload): Promise<ApprovalOutcome> {
@@ -356,6 +378,17 @@ export class GateService {
   }
 }
 
+const MAX_PR_BODY = 10_000;
+
+function prMeta(pr: PullRequestPayload["pull_request"]): ChangeRef["pr"] {
+  return {
+    headRef: pr.head.ref,
+    title: pr.title,
+    body: pr.body ? pr.body.slice(0, MAX_PR_BODY) : undefined,
+    labels: pr.labels?.map((l) => l.name),
+  };
+}
+
 /** Posts finished jobs to the history service (apps/history). */
 export class HttpHistorySink implements HistorySink {
   constructor(private readonly url: string, private readonly token?: string) {}
@@ -377,6 +410,7 @@ export class HttpHistorySink implements HistorySink {
         checks: job.result.checks,
         runnerId: job.runnerId ?? null,
         approvedBy: job.approvedBy ?? null,
+        ...(job.result.ai ? { aiGenerated: job.result.ai.generated, aiSignals: job.result.ai.signals } : {}),
         createdAt: job.createdAt,
         completedAt: job.completedAt ?? new Date().toISOString(),
       }),

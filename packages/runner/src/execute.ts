@@ -6,14 +6,17 @@ import {
   GATE_CONFIG_PATH,
   evaluateGate,
   parseGateConfig,
+  detectAiGenerated,
   type AgentCheck,
+  type AiDetection,
+  type ChangeRef,
   type CheckDefinition,
   type CheckResult,
   type GateConfig,
   type GateResult,
   type ScriptCheck,
 } from "@runstage-gate/core";
-import { diffForChange, ensureCommits, git, pathExistsAt } from "./git.ts";
+import { commitMessages, diffForChange, ensureCommits, git, pathExistsAt } from "./git.ts";
 
 export interface RunOptions {
   repo: string;
@@ -28,6 +31,8 @@ export interface RunOptions {
    * working tree instead of failing. Never set for jobs from the App (poll mode).
    */
   allowWorkingTreeConfig?: boolean;
+  /** PR metadata from the code host (branch, labels, body, author), for AI-generated detection. */
+  change?: Pick<ChangeRef, "pr" | "author">;
   /** Try `git fetch origin <sha>` for missing commits. */
   fetch?: boolean;
   log?: (line: string) => void;
@@ -70,6 +75,9 @@ export async function runGate(opts: RunOptions): Promise<GateResult> {
   await ensureCommits(opts.repo, [opts.base, opts.head], opts.fetch ?? false);
   const config = await loadConfig(opts);
   const diff = await diffForChange(opts.repo, opts.base, opts.head);
+  const ai = config.ai_detection.enabled ? await detectForChange(config, opts) : undefined;
+  if (ai) log(`AI-generated: ${ai.generated ? `yes (${ai.signals.join("; ")})` : "no"}`);
+  const policyRequired = new Set(ai?.generated ? config.ai_detection.policy.require_checks : []);
 
   // Checks run against a clean worktree of the head commit, never the user's checkout.
   const work = await mkdtemp(join(tmpdir(), "runstage-gate-"));
@@ -80,16 +88,28 @@ export async function runGate(opts: RunOptions): Promise<GateResult> {
   try {
     await pinGateDirToBase(opts.repo, tree, opts.base);
     const results: CheckResult[] = [];
-    for (const check of config.checks) {
+    for (const configured of config.checks) {
+      // AI policy: listed checks become required for AI-generated changes.
+      const check = policyRequired.has(configured.name) ? { ...configured, required: true } : configured;
       log(`▶ ${check.name} (${check.type})`);
-      const r = await runCheck(check, config, { ...opts, tree, diffFile, diff });
+      let r = await runCheck(check, config, { ...opts, tree, diffFile, diff, ai });
+      if (policyRequired.has(check.name) && r.status === "skipped") {
+        // A check the AI policy requires must actually run; skipping it would quietly weaken the gate.
+        r = { ...r, status: "error", reason: `required for AI-generated changes but skipped: ${r.reason}` };
+      }
       log(`  ${r.status}: ${r.reason}`);
       if ((r.status === "failed" || r.status === "error") && r.output.trim()) {
         log(r.output.trim().split("\n").map((l) => `    | ${l}`).join("\n"));
       }
       results.push(r);
     }
-    return evaluateGate(results);
+    if (ai?.generated && config.ai_detection.policy.require_approval) {
+      results.push({
+        name: "ai-approval", kind: "policy", required: true, status: "failed", exitCode: null, durationMs: 0, output: "",
+        reason: "AI-generated change: needs approval (Approve override button or a /runstage approve comment)",
+      });
+    }
+    return evaluateGate(results, { ai });
   } finally {
     await git(opts.repo, ["worktree", "remove", "--force", tree]).catch(() => {});
     await rm(work, { recursive: true, force: true });
@@ -100,6 +120,19 @@ interface CheckContext extends RunOptions {
   tree: string;
   diffFile: string;
   diff: string;
+  ai?: AiDetection;
+}
+
+async function detectForChange(config: GateConfig, opts: RunOptions): Promise<AiDetection> {
+  const pr = opts.change?.pr;
+  return detectAiGenerated(config.ai_detection, {
+    commitMessages: config.ai_detection.commit_trailers ? await commitMessages(opts.repo, opts.base, opts.head) : [],
+    branch: pr?.headRef,
+    labels: pr?.labels,
+    title: pr?.title,
+    body: pr?.body,
+    author: opts.change?.author,
+  });
 }
 
 async function runCheck(check: CheckDefinition, config: GateConfig, ctx: CheckContext): Promise<CheckResult> {
@@ -110,6 +143,9 @@ async function runCheck(check: CheckDefinition, config: GateConfig, ctx: CheckCo
     RUNSTAGE_REPO: ctx.tree,
     RUNSTAGE_DIFF_FILE: ctx.diffFile,
     RUNSTAGE_CHECK: check.name,
+    // "1" when ai_detection is enabled and found signals, else "0".
+    RUNSTAGE_AI_GENERATED: ctx.ai?.generated ? "1" : "0",
+    RUNSTAGE_AI_SIGNALS: ctx.ai?.signals.join("\n") ?? "",
   };
   if (check.type === "script") return runScript(check, ctx, env);
   return runAgent(check, config, ctx, env);

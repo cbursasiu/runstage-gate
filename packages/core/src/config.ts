@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { aiDetectionSchema } from "./ai.ts";
 
 const base = {
   name: z
@@ -51,6 +52,8 @@ export const gateConfigSchema = z
       .strict()
       .default({ enabled: false }),
     checks: z.array(checkSchema).min(1, "define at least one check"),
+    /** Detect AI-generated changes and apply extra policy to them. Off by default. */
+    ai_detection: aiDetectionSchema,
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -60,6 +63,15 @@ export const gateConfigSchema = z
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate check name "${c.name}"`, path: ["checks", i, "name"] });
       }
       seen.add(c.name);
+    });
+    cfg.ai_detection.policy.require_checks.forEach((name, i) => {
+      if (!seen.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `unknown check "${name}"`,
+          path: ["ai_detection", "policy", "require_checks", i],
+        });
+      }
     });
   });
 

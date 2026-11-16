@@ -3,7 +3,8 @@ export type CheckStatus = "passed" | "failed" | "skipped" | "error";
 
 export interface CheckResult {
   name: string;
-  kind: "script" | "agent";
+  /** "policy" marks a synthetic result added by gate policy (e.g. ai-approval). */
+  kind: "script" | "agent" | "policy";
   required: boolean;
   status: CheckStatus;
   /** Human-readable reason, shown in the GitHub check summary. */
@@ -23,6 +24,16 @@ export interface GateResult {
   /** Markdown summary for the check run. */
   summary: string;
   checks: CheckResult[];
+  /** AI-generated detection, when `ai_detection.enabled` is on in gate.yml. */
+  ai?: { generated: boolean; signals: string[] };
+}
+
+/** PR metadata the code host gives us, used for AI-generated detection. */
+export interface PullRequestMeta {
+  headRef?: string;
+  labels?: string[];
+  title?: string;
+  body?: string;
 }
 
 /**
@@ -40,6 +51,8 @@ export interface ChangeRef {
   /** Provider-specific auth context (GitHub installation id, etc.). */
   installationId?: number;
   author?: string;
+  /** PR metadata when the webhook carried it (labels, body, head branch). */
+  pr?: PullRequestMeta;
 }
 
 /** A unit of work handed to a runner. */
@@ -94,4 +107,7 @@ export interface RunRecord {
   completedAt: string;
   /** Optional PR diff. Omitted on older records; the history service may truncate it. */
   diff?: string;
+  /** AI-generated detection result, when enabled in gate.yml. */
+  aiGenerated?: boolean;
+  aiSignals?: string[];
 }
