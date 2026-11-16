@@ -45,6 +45,13 @@ export interface PullRequestPayload extends RepoPayload {
 
 /** Provider-neutral orchestration: start a check, queue a job, finish the check. */
 export class GateService {
+  /**
+   * In-flight startCheck+enqueue work, keyed by repo+headSha. Concurrent webhooks for the
+   * same commit (check_suite and pull_request arriving together) share one promise so only
+   * one check run and one job are created. Single-process only.
+   */
+  private readonly inFlight = new Map<string, Promise<GateJob>>();
+
   constructor(private readonly deps: GateServiceDeps) {}
 
   private log(line: string) {
@@ -121,15 +128,33 @@ export class GateService {
 
   /**
    * Create the in-progress check run and queue a job keyed by it, unless a job for this commit is
-   * still queued or claimed (then that job is reused). Completed jobs never block a new run, so
-   * re-runs always get a fresh check run and job; a crashed runner's claim is re-queued by its lease.
+   * still queued or claimed (then that job is reused). Concurrent requests for the same commit
+   * share one in-flight start, so check_suite and pull_request webhooks that arrive together
+   * produce one check run and one job. Completed jobs never block a new run, so re-runs always
+   * get a fresh check run and job; a crashed runner's claim is re-queued by its lease. A failure
+   * in startCheck clears the in-flight entry so a later request can retry.
    */
   async requestGate(change: ChangeRef): Promise<GateJob | undefined> {
+    const key = `${change.repoFullName}@${change.headSha}`;
+    const pending = this.inFlight.get(key);
+    if (pending) {
+      const job = await pending;
+      this.log(`${change.repoFullName}@${change.headSha.slice(0, 7)}: job ${job.id} already active`);
+      return job;
+    }
     const active = this.deps.queue.findActive(change.repoFullName, change.headSha);
     if (active) {
       this.log(`${change.repoFullName}@${change.headSha.slice(0, 7)}: job ${active.id} already active`);
       return active;
     }
+    const work = this.startAndEnqueue(change).finally(() => {
+      this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, work);
+    return work;
+  }
+
+  private async startAndEnqueue(change: ChangeRef): Promise<GateJob> {
     const checkId = await this.deps.provider.startCheck(change);
     const job = this.deps.queue.enqueue(change, checkId);
     this.log(`queued job ${job.id} for ${change.repoFullName}#${change.prNumber} (check ${checkId})`);
