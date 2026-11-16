@@ -143,6 +143,8 @@ See [`examples/gate.yml`](examples/gate.yml) and
   complete it.
 - Durable job queue in a single JSON file (atomic writes) that survives restarts, with claim
   leases plus runner heartbeats (crashed runners' jobs are re-queued) and webhook de-duplication.
+  `gate poll` keeps running through App restarts: it backs off (1s doubling to 60s) while the
+  server is unreachable or returns 5xx, and retries posting results.
 - History service with a small web UI at `/`, `POST /runs` and `GET /runs` (JSON; `/api/runs` is an alias), in-memory or a JSON file.
   Token auth: bearer tokens for the API, a sign-in form with an HttpOnly session cookie for browsers.
 - Tests for config parsing, gate evaluation, the webhook flow (Octokit mocked), the runner
