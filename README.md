@@ -155,9 +155,9 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - Runner tokens are per App, not per GitHub installation or team (no multi-tenant isolation).
 - Runs on every PR. Detecting "AI-generated" PRs (labels, bot authors, commit trailers) is
   not built yet.
-- `approvedBy` is always null: approve/override flow not built.
+- Approvals: an **Approve override** check-run button or a `/runstage approve` PR comment by a
+  user with write access (see [docs/approvals.md](docs/approvals.md)). Refusals are only logged.
 - History has single-tenant token auth only (no users, roles or multi-tenant isolation).
-- `check_run.requested_action` (custom check-run buttons) is not handled.
 - No npm publish yet. `npm run build` compiles every package to `dist/` (see below).
 - No GitLab provider yet (interface is ready).
 

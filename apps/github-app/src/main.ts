@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { App } from "@octokit/app";
-import { GitHubCheckProvider, type ChecksClient } from "./github-provider.ts";
+import { GitHubApprovals, GitHubCheckProvider, type ApprovalClient, type ChecksClient } from "./github-provider.ts";
 import { GateService, HttpHistorySink } from "./handlers.ts";
 import { JobQueue } from "./queue.ts";
 import { loadRunnerRegistry, type RunnerRegistry } from "./runners.ts";
@@ -41,8 +41,17 @@ try {
   console.error((err as Error).message);
   process.exit(2);
 }
+// Approvals (override a failed gate): on unless RUNSTAGE_APPROVALS=0. See docs/approvals.md.
+const approvalsEnabled = process.env.RUNSTAGE_APPROVALS !== "0";
 const service = new GateService({
-  provider: new GitHubCheckProvider(async (id) => (await app.getInstallationOctokit(id)) as ChecksClient),
+  provider: new GitHubCheckProvider(async (id) => (await app.getInstallationOctokit(id)) as ChecksClient, {
+    approvalButton: approvalsEnabled,
+  }),
+  approvals: approvalsEnabled
+    ? Object.assign(new GitHubApprovals(async (id) => (await app.getInstallationOctokit(id)) as unknown as ApprovalClient), {
+        allowSelfApproval: process.env.RUNSTAGE_APPROVALS_ALLOW_SELF !== "0",
+      })
+    : undefined,
   queue,
   appId: Number(env("GITHUB_APP_ID")),
   history: process.env.RUNSTAGE_HISTORY_URL

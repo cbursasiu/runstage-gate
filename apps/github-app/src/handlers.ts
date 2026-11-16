@@ -1,5 +1,6 @@
 import { CHECK_NAME, type ChangeRef, type CheckProvider, type GateJob, type GateResult } from "@runstage-gate/core";
 import type { JobOutcome, JobStore } from "./queue.ts";
+import { APPROVE_ACTION_ID } from "./github-provider.ts";
 
 export interface HistorySink {
   record(job: GateJob): Promise<void>;
@@ -20,6 +21,42 @@ export interface GateServiceDeps {
   /** Total failed report attempts (inline + background) before giving up on a job. Default 50. */
   maxReportAttempts?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Enables approvals (override a failed gate). See docs/approvals.md. */
+  approvals?: ApprovalDeps;
+}
+
+export interface ApprovalDeps {
+  /** The user's role on the repo: admin, maintain, write, triage, read or none. */
+  permissionOf(change: ChangeRef, login: string): Promise<string>;
+  /** Needed for `/runstage approve` comments, which do not carry the head sha. */
+  pullRequest?(change: Pick<ChangeRef, "repoFullName" | "installationId">, number: number): Promise<{ headSha: string; baseSha: string; author?: string }>;
+  /** Let a PR's author approve their own PR. Default true (solo repos). */
+  allowSelfApproval?: boolean;
+}
+
+/** Roles allowed to approve. "maintain" and "admin" include write. */
+export const APPROVER_ROLES: ReadonlySet<string> = new Set(["admin", "maintain", "write"]);
+
+export type ApprovalRefusal = "disabled" | "no_job" | "stale" | "still_running" | "not_failed" | "already_approved" | "self_approval" | "forbidden";
+export type ApprovalOutcome = { ok: true; job: GateJob } | { ok: false; reason: ApprovalRefusal };
+
+/** The command recognised in PR comments. Must start the comment (after whitespace). */
+export const APPROVE_COMMAND = /^\s*\/runstage\s+approve\b/i;
+
+/** The result reported for an approved job: success, with who approved and the original verdict. */
+export function approvedResult(job: GateJob): GateResult {
+  const original = job.result!;
+  const when = job.approvedAt ?? new Date().toISOString();
+  const via = job.approvedVia === "comment" ? "a `/runstage approve` comment" : "the **Approve override** button";
+  return {
+    ...original,
+    conclusion: "success",
+    title: `Approved by ${job.approvedBy} (override): ${original.title}`.slice(0, 255),
+    summary:
+      `> **Approved by @${job.approvedBy}** via ${via} at ${when}.\n` +
+      `> The gate had failed (${original.title}); this override marks it as passed. A new push re-runs the gate.\n\n` +
+      original.summary,
+  };
 }
 
 /** Minimal shapes of the webhook payloads we read (subset of @octokit/webhooks types). */
@@ -37,13 +74,21 @@ export interface CheckSuitePayload extends RepoPayload {
 }
 export interface CheckRunPayload extends RepoPayload {
   action: string;
+  /** Present when action is "requested_action" (a check-run button was clicked). */
+  requested_action?: { identifier: string };
   check_run: {
     id: number;
     name: string;
     head_sha: string;
     app?: { id: number };
+    external_id?: string;
     pull_requests: Array<{ number: number; base: { sha: string }; head: { sha: string } }>;
   };
+}
+export interface IssueCommentPayload extends RepoPayload {
+  action: string;
+  issue: { number: number; pull_request?: unknown };
+  comment: { id: number; body: string; user: { login: string; type?: string } };
 }
 export interface PullRequestPayload extends RepoPayload {
   action: string;
@@ -93,12 +138,17 @@ export class GateService {
    * completed job. Only our own check runs (name, and app id when configured) are handled.
    */
   async onCheckRun(p: CheckRunPayload): Promise<GateJob | undefined> {
-    if (p.action !== "rerequested") return undefined;
+    if (p.action !== "rerequested" && p.action !== "requested_action") return undefined;
     const cr = p.check_run;
     if (cr.name !== CHECK_NAME) return undefined;
     if (this.deps.appId !== undefined && cr.app?.id !== this.deps.appId) {
       this.log(`check_run ${cr.id}: owned by app ${cr.app?.id ?? "?"}, not us, skipping`);
       return undefined;
+    }
+    if (p.action === "requested_action") {
+      if (p.requested_action?.identifier !== APPROVE_ACTION_ID) return undefined;
+      const outcome = await this.onApproveButton(p);
+      return outcome.ok ? outcome.job : undefined;
     }
     const pr = cr.pull_requests.find((x) => x.head.sha === cr.head_sha) ?? cr.pull_requests[0];
     if (!pr) {
@@ -188,6 +238,67 @@ export class GateService {
   }
   private retrying = false;
 
+  /** "Approve override" button on a failed RunStage Gate check run. */
+  async onApproveButton(p: CheckRunPayload): Promise<ApprovalOutcome> {
+    const login = p.sender?.login ?? "";
+    const checkId = String(p.check_run.id);
+    const job = this.deps.queue
+      .list()
+      .filter((j) => j.change.repoFullName === p.repository.full_name && j.externalCheckId === checkId)
+      .pop();
+    if (!job) return this.refuseApproval("no_job", `check ${checkId}`, login);
+    return this.approve(job, login, "check_run_action");
+  }
+
+  /** `/runstage approve` as a PR comment. Needs the Issue comment event (see docs/approvals.md). */
+  async onIssueComment(p: IssueCommentPayload): Promise<ApprovalOutcome | undefined> {
+    if (p.action !== "created" || !p.issue.pull_request || !APPROVE_COMMAND.test(p.comment.body)) return undefined;
+    if (p.comment.user.type === "Bot") return undefined;
+    const login = p.comment.user.login;
+    const where = `${p.repository.full_name}#${p.issue.number}`;
+    if (!this.deps.approvals?.pullRequest) return this.refuseApproval("disabled", where, login);
+    const pr = await this.deps.approvals.pullRequest({ repoFullName: p.repository.full_name, installationId: p.installation?.id }, p.issue.number);
+    const job = this.deps.queue.latestFor(p.repository.full_name, pr.headSha);
+    if (!job) return this.refuseApproval("no_job", `${where}@${pr.headSha.slice(0, 7)}`, login);
+    return this.approve(job, login, "comment");
+  }
+
+  /**
+   * Override a failed gate: verifies the approver has write, maintain or admin on the repo,
+   * re-completes the check as success with an "Approved by" note, and records it (queue + history).
+   */
+  async approve(job: GateJob, login: string, via: NonNullable<GateJob["approvedVia"]>): Promise<ApprovalOutcome> {
+    const where = `job ${job.id} (${job.change.repoFullName}@${job.change.headSha.slice(0, 7)})`;
+    const approvals = this.deps.approvals;
+    if (!approvals) return this.refuseApproval("disabled", where, login);
+    const latest = this.deps.queue.latestFor(job.change.repoFullName, job.change.headSha);
+    if (latest && latest.id !== job.id) return this.refuseApproval("stale", where, login);
+    if (job.status !== "completed" || !job.result) return this.refuseApproval("still_running", where, login);
+    if (job.approvedBy) return this.refuseApproval("already_approved", where, login);
+    if (job.result.conclusion !== "failure") return this.refuseApproval("not_failed", where, login);
+    if (!login) return this.refuseApproval("forbidden", where, login);
+    if (approvals.allowSelfApproval === false && job.change.author && job.change.author === login) {
+      return this.refuseApproval("self_approval", where, login);
+    }
+    const role = await approvals.permissionOf(job.change, login);
+    if (!APPROVER_ROLES.has(role)) return this.refuseApproval("forbidden", `${where}, role ${role}`, login);
+
+    const approved = this.deps.queue.approve(job.id, login, via) ?? job;
+    const result = approvedResult(approved);
+    this.log(`${where}: approved by ${login} (${role}) via ${via}`);
+    const reported = await this.reportInline(approved, result);
+    if (!reported) this.log(`${where}: approval recorded; check update pending retry`);
+    if (this.deps.history) {
+      await this.deps.history.record({ ...approved, result }).catch((err) => this.log(`history: ${(err as Error).message}`));
+    }
+    return { ok: true, job: approved };
+  }
+
+  private refuseApproval(reason: ApprovalRefusal, where: string, login: string): ApprovalOutcome {
+    this.log(`approval by ${login || "?"} refused for ${where}: ${reason}`);
+    return { ok: false, reason };
+  }
+
   /** Report a finished job to the provider, retrying with backoff. Records the outcome on the job. */
   private async reportInline(job: GateJob, result: GateResult): Promise<boolean> {
     const delays = this.deps.reportRetryDelaysMs ?? [1000, 4000];
@@ -232,7 +343,8 @@ export class GateService {
           this.deps.queue.setReportState(job.id, { ok: false, error: "no stored result", giveUp: true });
           continue;
         }
-        if (await this.tryReport(job, job.result, "background retry")) {
+        const final = job.approvedBy ? approvedResult(job) : job.result;
+        if (await this.tryReport(job, final, "background retry")) {
           this.log(`job ${job.id}: check ${job.externalCheckId} updated on retry`);
           done++;
         }
@@ -264,7 +376,7 @@ export class HttpHistorySink implements HistorySink {
         summary: job.result.summary,
         checks: job.result.checks,
         runnerId: job.runnerId ?? null,
-        approvedBy: null,
+        approvedBy: job.approvedBy ?? null,
         createdAt: job.createdAt,
         completedAt: job.completedAt ?? new Date().toISOString(),
       }),
