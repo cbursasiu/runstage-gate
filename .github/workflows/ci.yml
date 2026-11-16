@@ -16,11 +16,22 @@ concurrency:
 
 jobs:
   test:
+    # Fork PRs never run on the self-hosted runner (untrusted code would execute on the host).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: node -v && npm -v
+      - name: Secret scan (gitleaks)
+        run: |
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            echo "gitleaks is not installed on this runner. Install it (e.g. brew install gitleaks) and re-run."
+            exit 1
+          fi
+          gitleaks git --redact=100
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
