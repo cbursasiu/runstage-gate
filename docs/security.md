@@ -127,9 +127,12 @@ Checks always execute on your local runner. There is no hosted fallback anywhere
   run; it does not call the Actions API, dispatch workflows, or start any hosted runner.
 - The runner is the only component that runs checks (`packages/runner/src/execute.ts`), and it
   only runs jobs signed by your App.
-- `.github/workflows/ci.yml` runs on `[self-hosted, macOS, ARM64]` only; a test
-  (`apps/github-app/test/local-only.test.ts`) fails if any workflow job uses another `runs-on` or
-  a reusable workflow.
+- `.github/workflows/ci.yml` runs on `[self-hosted, macOS, ARM64]` only. A test
+  (`apps/github-app/test/local-only.test.ts`) parses every `.github/workflows/*.yml` and fails if
+  any job's `runs-on` lacks `self-hosted`, names a GitHub-hosted label (`ubuntu-*`, `macos-*`,
+  `windows-*`, `*-latest`), uses an expression or runner group, or calls a reusable workflow; it
+  also pins `ci.yml` to exactly `[self-hosted, macOS, ARM64]`. It runs in `npm test`, so the
+  self-hosted CI fails on a change that would move CI to hosted runners.
 - When no runner is online, the job stays queued and the check run stays in progress ("A runner
   on your team's machine will run the checks"); a claimed job whose runner disappears goes back to
   the queue when its lease expires. Nothing else picks it up. What should happen after a long
