@@ -1,6 +1,6 @@
 import type { CheckResult, GateConclusion, RunRecord } from "@runstage-gate/core";
 
-const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const REPO_RE = /^(?!\.+\/)[A-Za-z0-9_.-]+\/(?!\.+$)[A-Za-z0-9_.-]+$/;
 const SHA_RE = /^[0-9a-fA-F]{1,64}$/;
 
 export function escapeHtml(value: string): string {
@@ -29,7 +29,7 @@ export function runDurationMs(run: RunRecord): number | null {
   const start = Date.parse(run.createdAt);
   const end = Date.parse(run.completedAt);
   if (Number.isFinite(start) && Number.isFinite(end) && end >= start) return end - start;
-  if (run.checks.length > 0) return run.checks.reduce((sum, c) => sum + (c.durationMs || 0), 0);
+  if ((run.checks ?? []).length > 0) return (run.checks ?? []).reduce((sum, c) => sum + (c.durationMs || 0), 0);
   return null;
 }
 
@@ -247,7 +247,7 @@ function checkRow(check: CheckResult): string {
 }
 
 function failingOutputs(run: RunRecord): string {
-  const failing = run.checks.filter((c) => c.status === "failed" || c.status === "error");
+  const failing = (run.checks ?? []).filter((c) => c.status === "failed" || c.status === "error");
   if (failing.length === 0) return `<p class="muted">No failing checks.</p>`;
   return failing
     .map((c) => {
@@ -264,7 +264,7 @@ export function renderDetailPage(run: RunRecord): string {
   const prLabel = run.prNumber != null ? `#${run.prNumber}` : "—";
   const compare = githubCompareUrl(run.repoFullName, run.baseSha, run.headSha);
   const files = run.prNumber != null ? githubFilesUrl(run.repoFullName, run.prNumber) : undefined;
-  const checks = run.checks.length
+  const checks = (run.checks ?? []).length
     ? `<table>
         <thead>
           <tr>
@@ -277,7 +277,7 @@ export function renderDetailPage(run: RunRecord): string {
           </tr>
         </thead>
         <tbody>
-${run.checks.map(checkRow).join("\n")}
+${(run.checks ?? []).map(checkRow).join("\n")}
         </tbody>
       </table>`
     : `<p class="muted">No checks recorded.</p>`;
@@ -336,21 +336,21 @@ export function renderNotFoundPage(): string {
 
 export function wantsHtml(acceptHeader: string | undefined): boolean {
   const accept = acceptHeader ?? "";
-  const hasHtml = /\btext\/html\b/i.test(accept);
-  const hasJson = /\bapplication\/json\b/i.test(accept);
-  if (hasHtml && !hasJson) return true;
-  if (hasHtml && hasJson) {
-    // Prefer the higher q-value; default q is 1. Browser Accept lists text/html first.
-    const htmlQ = qValue(accept, "text/html");
-    const jsonQ = qValue(accept, "application/json");
-    return htmlQ >= jsonQ;
-  }
-  return false;
+  const htmlQ = qValue(accept, "text/html");
+  const jsonQ = qValue(accept, "application/json");
+  // Browsers list text/html explicitly; API clients and curl send */* or application/json.
+  return htmlQ > 0 && htmlQ >= jsonQ;
 }
 
+/** q-value of an explicitly listed media type (0 when absent or unparseable). */
 function qValue(accept: string, type: string): number {
-  const re = new RegExp(`${type.replace("/", "\\/")}\\s*(?:;\\s*q=([0-9.]+))?`, "i");
-  const m = re.exec(accept);
-  if (!m) return 0;
-  return m[1] != null ? Number(m[1]) : 1;
+  for (const part of accept.split(",")) {
+    const [media, ...params] = part.trim().split(";");
+    if (media?.trim().toLowerCase() !== type) continue;
+    const q = params.map((p) => p.trim()).find((p) => p.toLowerCase().startsWith("q="));
+    if (!q) return 1;
+    const n = Number(q.slice(2));
+    return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0;
+  }
+  return 0;
 }

@@ -29,7 +29,7 @@ export class RunStore {
   }
 
   add(run: NewRun): RunRecord {
-    const rec: RunRecord = { id: randomUUID(), ...run, diff: boundDiff(run.diff) };
+    const rec: RunRecord = { ...run, id: randomUUID(), diff: boundDiff(run.diff) };
     if (rec.diff === undefined) delete rec.diff;
     this.runs.push(rec);
     this.flush();

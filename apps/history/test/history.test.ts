@@ -1,8 +1,8 @@
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import type { CheckResult, RunRecord } from "@runstage-gate/core";
-import { RunStore, createHistoryServer, MAX_DIFF_CHARS } from "../src/index.ts";
-import { escapeHtml } from "../src/html.ts";
+import { RunStore, createHistoryServer, MAX_DIFF_CHARS, MAX_BODY_BYTES } from "../src/index.ts";
+import { escapeHtml, wantsHtml } from "../src/html.ts";
 
 const HTML = { accept: "text/html" };
 const JSON_ACCEPT = { accept: "application/json" };
@@ -234,6 +234,125 @@ describe("history HTML UI", () => {
       expect(res.status).toBe(404);
       expect(res.headers.get("content-type")).toMatch(/text\/html/);
       expect(await res.text()).toContain("Run not found");
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("history hardening (PR #7 review)", () => {
+  it("does not crash on malformed percent-encoding in a run id", async () => {
+    const { server, url } = await listen();
+    try {
+      const bad = await fetch(`${url}/runs/%E0%A4%A`);
+      expect(bad.status).toBe(404);
+      const badHtml = await fetch(`${url}/runs/%`, { headers: HTML });
+      expect(badHtml.status).toBe(404);
+      // still alive
+      expect((await fetch(`${url}/runs`)).status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("ignores a client-supplied id and drops unknown fields", async () => {
+    const store = new RunStore();
+    const { server, url } = await listen(store);
+    try {
+      const res = await fetch(`${url}/runs`, {
+        method: "POST",
+        body: JSON.stringify({ ...sampleRun(), id: "chosen-id", extra: "x" }),
+      });
+      expect(res.status).toBe(201);
+      const saved = (await res.json()) as RunRecord & { extra?: string };
+      expect(saved.id).not.toBe("chosen-id");
+      expect(saved.extra).toBeUndefined();
+      expect(store.get("chosen-id")).toBeUndefined();
+    } finally {
+      server.close();
+    }
+  });
+
+  it("rejects malformed run bodies instead of storing records that break the UI", async () => {
+    const { server, url } = await listen();
+    try {
+      const post = (body: unknown) => fetch(`${url}/runs`, { method: "POST", body: JSON.stringify(body) });
+      expect((await post([])).status).toBe(400);
+      expect((await post({ ...sampleRun(), conclusion: "maybe" })).status).toBe(400);
+      expect((await post({ ...sampleRun(), checks: "nope" })).status).toBe(400);
+      expect((await post({ ...sampleRun(), checks: [{ name: "x", status: "weird" }] })).status).toBe(400);
+      expect((await post({ ...sampleRun(), prNumber: "42" })).status).toBe(400);
+      const ok = await post({ repoFullName: "acme/x", headSha: "abc", conclusion: "success" });
+      expect(ok.status).toBe(201);
+      const saved = (await ok.json()) as RunRecord;
+      expect(saved.checks).toEqual([]);
+      const page = await fetch(`${url}/runs/${saved.id}`, { headers: HTML });
+      expect(page.status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("refuses oversized POST bodies with 413", async () => {
+    const { server, url } = await listen();
+    try {
+      const res = await fetch(`${url}/runs`, {
+        method: "POST",
+        body: JSON.stringify({ ...sampleRun(), summary: "x".repeat(MAX_BODY_BYTES + 10) }),
+      });
+      expect(res.status).toBe(413);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("sends a strict CSP and nosniff on HTML pages, and Vary: Accept on negotiated routes", async () => {
+    const store = new RunStore();
+    const run = store.add(sampleRun());
+    const { server, url } = await listen(store);
+    try {
+      const page = await fetch(`${url}/`);
+      expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+      expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(page.headers.get("x-frame-options")).toBe("DENY");
+      const detail = await fetch(`${url}/runs/${run.id}`, { headers: HTML });
+      expect(detail.headers.get("vary")).toBe("Accept");
+    } finally {
+      server.close();
+    }
+  });
+
+  it("negotiates HTML only when text/html is explicitly preferred", () => {
+    expect(wantsHtml(undefined)).toBe(false);
+    expect(wantsHtml("*/*")).toBe(false);
+    expect(wantsHtml("application/json")).toBe(false);
+    expect(wantsHtml("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")).toBe(true);
+    expect(wantsHtml("text/html;q=0")).toBe(false);
+    expect(wantsHtml("application/json, text/html;q=0.5")).toBe(false);
+    expect(wantsHtml("text/html, application/json;q=0.9")).toBe(true);
+    expect(wantsHtml("text/htmlx")).toBe(false);
+  });
+
+  it("treats a non-numeric pr filter as matching nothing", async () => {
+    const store = new RunStore();
+    store.add(sampleRun());
+    const { server, url } = await listen(store);
+    try {
+      expect(((await (await fetch(`${url}/runs?pr=abc`)).json()) as unknown[]).length).toBe(0);
+      expect(((await (await fetch(`${url}/runs?pr=42`)).json()) as unknown[]).length).toBe(1);
+      expect(((await (await fetch(`${url}/runs?pr=`)).json()) as unknown[]).length).toBe(1);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("does not build GitHub links from dot-only repo segments", async () => {
+    const store = new RunStore();
+    const run = store.add(sampleRun({ repoFullName: "../.." }));
+    const { server, url } = await listen(store);
+    try {
+      const html = await (await fetch(`${url}/runs/${run.id}`, { headers: HTML })).text();
+      expect(html).not.toContain("https://github.com/../");
     } finally {
       server.close();
     }
