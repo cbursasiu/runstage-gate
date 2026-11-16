@@ -55,3 +55,15 @@ export async function pathExistsAt(repo: string, commit: string, path: string): 
     return false;
   }
 }
+
+/** Full messages of the commits a PR adds (merge-base(base, head)..head), newest first, capped. */
+export async function commitMessages(repo: string, base: string, head: string, max = 200): Promise<string[]> {
+  let from = base;
+  try {
+    from = (await git(repo, ["merge-base", base, head])).trim() || base;
+  } catch {
+    // unrelated histories: fall back to base..head
+  }
+  const out = await git(repo, ["log", `--max-count=${max}`, "--format=%B%x00", `${from}..${head}`]);
+  return out.split("\0").map((m) => m.trim()).filter(Boolean);
+}

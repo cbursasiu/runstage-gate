@@ -319,6 +319,13 @@ ${(run.checks ?? []).map(checkRow).join("\n")}
         <dt>Base</dt><dd class="mono">${link(githubCommitUrl(run.repoFullName, run.baseSha), run.baseSha)}</dd>
         <dt>Verdict</dt><dd>${badge(run.conclusion)}</dd>
         <dt>Runner</dt><dd class="mono">${escapeHtml(run.runnerId ?? "—")}</dd>
+        ${
+          typeof run.aiGenerated === "boolean"
+            ? `<dt>AI-generated</dt><dd>${run.aiGenerated ? "yes" : "no"}${
+                run.aiSignals?.length ? ` <span class="muted">(${escapeHtml(run.aiSignals.join("; "))})</span>` : ""
+              }</dd>`
+            : ""
+        }
         ${run.approvedBy ? `<dt>Approved by</dt><dd>${escapeHtml(run.approvedBy)}</dd>` : ""}
         <dt>Created</dt><dd>${escapeHtml(formatTime(run.createdAt))}</dd>
         <dt>Completed</dt><dd>${escapeHtml(formatTime(run.completedAt))}</dd>

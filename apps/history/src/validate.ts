@@ -17,7 +17,7 @@ function parseCheck(v: unknown, i: number): CheckResult | string {
   if (typeof v.status !== "string" || !CHECK_STATUSES.has(v.status)) return `checks[${i}].status is invalid`;
   return {
     name: v.name,
-    kind: v.kind === "agent" ? "agent" : "script",
+    kind: v.kind === "agent" || v.kind === "policy" ? v.kind : "script",
     required: v.required !== false,
     status: v.status as CheckResult["status"],
     reason: str(v.reason),
@@ -63,5 +63,7 @@ export function parseNewRun(body: unknown): { ok: true; run: NewRun } | { ok: fa
     completedAt: str(body.completedAt, now),
   };
   if (typeof body.diff === "string" && body.diff.length > 0) run.diff = body.diff;
+  if (typeof body.aiGenerated === "boolean") run.aiGenerated = body.aiGenerated;
+  if (Array.isArray(body.aiSignals)) run.aiSignals = body.aiSignals.filter((x): x is string => typeof x === "string").slice(0, 50);
   return { ok: true, run };
 }

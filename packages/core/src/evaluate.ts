@@ -1,3 +1,4 @@
+import type { AiDetection } from "./ai.ts";
 import type { CheckResult, GateResult } from "./types.ts";
 
 const ICON: Record<CheckResult["status"], string> = {
@@ -15,7 +16,7 @@ const ICON: Record<CheckResult["status"], string> = {
  * - skipped checks never block
  * - zero checks actually executed -> failure (a gate that ran nothing should not pass)
  */
-export function evaluateGate(checks: CheckResult[]): GateResult {
+export function evaluateGate(checks: CheckResult[], extra: { ai?: AiDetection } = {}): GateResult {
   const blocking = checks.filter((c) => c.required && (c.status === "failed" || c.status === "error"));
   const executed = checks.filter((c) => c.status !== "skipped");
   const optionalFailed = checks.filter((c) => !c.required && (c.status === "failed" || c.status === "error"));
@@ -36,6 +37,14 @@ export function evaluateGate(checks: CheckResult[]): GateResult {
 
   const lines = [
     `**${conclusion === "success" ? "Gate passed" : "Gate blocked"}**: ${title}`,
+    ...(extra.ai
+      ? [
+          "",
+          extra.ai.generated
+            ? `**AI-generated**: yes (${extra.ai.signals.map(escapeCell).join("; ")})`
+            : "**AI-generated**: no signals found",
+        ]
+      : []),
     "",
     "| | Check | Kind | Required | Reason |",
     "|---|---|---|---|---|",
@@ -48,7 +57,7 @@ export function evaluateGate(checks: CheckResult[]): GateResult {
       lines.push("", `<details><summary>${c.name} output</summary>`, "", "```", c.output.trim(), "```", "", "</details>");
     }
   }
-  return { conclusion, title, summary: lines.join("\n"), checks };
+  return { conclusion, title, summary: lines.join("\n"), checks, ...(extra.ai ? { ai: extra.ai } : {}) };
 }
 
 function escapeCell(s: string): string {

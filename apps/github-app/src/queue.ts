@@ -21,6 +21,8 @@ export interface JobStore {
   complete(id: string, runnerId: string, result: GateResult): JobOutcome;
   /** Record the outcome of reporting a completed job's result to the provider. */
   setReportState(id: string, state: { ok: boolean; error?: string; giveUp?: boolean }): GateJob | undefined;
+  /** Add PR metadata/author to a job that is still queued. */
+  updateChange(id: string, patch: Partial<Pick<ChangeRef, "pr" | "author">>): GateJob | undefined;
   /** Record an approval (override) on a completed job. */
   approve(id: string, login: string, via: NonNullable<GateJob["approvedVia"]>): GateJob | undefined;
   /** The newest job for a commit, any status. */
@@ -182,6 +184,14 @@ export class JobQueue implements JobStore {
       if (state.giveUp) delete job.reportPending;
       else job.reportPending = true;
     }
+    this.persist();
+    return job;
+  }
+
+  updateChange(id: string, patch: Partial<Pick<ChangeRef, "pr" | "author">>): GateJob | undefined {
+    const job = this.jobs.find((j) => j.id === id);
+    if (!job || job.status !== "queued") return undefined;
+    job.change = { ...job.change, ...patch };
     this.persist();
     return job;
   }
