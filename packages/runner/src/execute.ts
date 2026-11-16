@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   GATE_CONFIG_PATH,
   evaluateGate,
@@ -125,7 +125,57 @@ async function pinGateDirToBase(repo: string, tree: string, base: string): Promi
   await rm(join(tree, GATE_DIR), { recursive: true, force: true });
   if (await pathExistsAt(repo, base, GATE_DIR)) {
     await git(tree, ["checkout", "--quiet", base, "--", GATE_DIR]);
+    await assertGateDirContained(tree);
   }
+}
+
+/** Thrown when the base commit's `.runstage/` contains links that point outside it. */
+export class GateDirEscapeError extends Error {
+  constructor(readonly links: string[]) {
+    super(
+      `${GATE_DIR}/ on the base commit contains symlinks that resolve outside ${GATE_DIR}/: ${links.join(", ")}. ` +
+        `Those targets come from the PR head, so the PR could rewrite the check. Replace the links with real files.`,
+    );
+    this.name = "GateDirEscapeError";
+  }
+}
+
+function isInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Every symlink under `.runstage/` (after pinning it to base) must resolve inside `.runstage/`.
+ * Otherwise a base link like `.runstage/checks/x.sh -> ../../src/x.sh` would run PR-controlled code.
+ * `.runstage` itself must be a real directory.
+ */
+export async function assertGateDirContained(tree: string): Promise<void> {
+  const gateDir = join(tree, GATE_DIR);
+  const top = await lstat(gateDir);
+  if (top.isSymbolicLink()) throw new GateDirEscapeError([GATE_DIR]);
+  if (!top.isDirectory()) return;
+  const root = await realpath(gateDir);
+  const bad: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        let target: string;
+        try {
+          target = await realpath(p);
+        } catch {
+          // Dangling: resolve the link text against the link's real parent directory.
+          target = resolve(await realpath(dirname(p)), await readlink(p));
+        }
+        if (!isInside(root, target)) bad.push(relative(tree, p));
+      } else if (entry.isDirectory()) {
+        await walk(p);
+      }
+    }
+  };
+  await walk(gateDir);
+  if (bad.length) throw new GateDirEscapeError(bad.sort());
 }
 
 /** `.runstage/...` paths named in a check command (e.g. `bash .runstage/checks/x.sh`). */
@@ -136,17 +186,29 @@ export function gatePathsIn(command: string): string[] {
   return [...paths];
 }
 
-async function runScript(check: ScriptCheck, ctx: CheckContext, env: NodeJS.ProcessEnv): Promise<CheckResult> {
-  for (const path of gatePathsIn(check.run)) {
+/** Error result if a `.runstage/...` path named in `command` is not on the base commit. */
+async function missingOnBase(
+  command: string,
+  check: { name: string; required: boolean },
+  kind: CheckResult["kind"],
+  ctx: CheckContext,
+): Promise<CheckResult | undefined> {
+  for (const path of gatePathsIn(command)) {
     if (!(await pathExistsAt(ctx.repo, ctx.base, path))) {
       return {
-        name: check.name, kind: "script", required: check.required, status: "error", exitCode: null, durationMs: 0, output: "",
+        name: check.name, kind, required: check.required, status: "error", exitCode: null, durationMs: 0, output: "",
         reason:
           `${path} is not on the base commit ${ctx.base.slice(0, 12)}. Check scripts are loaded from the base, ` +
           "never from the PR head; merge the script to the base branch first.",
       };
     }
   }
+  return undefined;
+}
+
+async function runScript(check: ScriptCheck, ctx: CheckContext, env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const missing = await missingOnBase(check.run, check, "script", ctx);
+  if (missing) return missing;
   const r = await exec("bash", ["-c", check.run], { cwd: ctx.tree, env, timeoutMs: check.timeout_seconds * 1000 });
   return toResult(check.name, "script", check.required, r);
 }
@@ -163,6 +225,9 @@ async function runAgent(check: AgentCheck, config: GateConfig, ctx: CheckContext
   if (!config.agents.enabled) return skip("agent checks disabled in gate.yml (agents.enabled: false)");
   if (!ctx.allowAgents) return skip("agent checks not allowed on this runner (pass --allow-agents)");
   const command = check.command ?? AGENT_COMMANDS[check.agent as Exclude<AgentCheck["agent"], "custom">];
+  // Same rule as script checks: helper files an agent command names must exist on the base.
+  const missing = await missingOnBase(command, check, "agent", ctx);
+  if (missing) return missing;
   const bin = command.split(/\s+/)[0]!;
   const which = await exec("bash", ["-c", `command -v ${JSON.stringify(bin)}`], { cwd: ctx.tree, env, timeoutMs: 5000 });
   if (which.code !== 0) return skip(`${bin} is not installed on this runner`);

@@ -111,13 +111,18 @@ Jobs live in `RUNSTAGE_QUEUE_FILE` (default `.runstage-gate-data/queue.json`, gi
 queued and claimed jobs survive an App restart. Duplicate webhooks (same delivery id, or the
 same commit and check run) don't create duplicate jobs.
 
+If GitHub rejects the final check-run update after a runner posts its result (outage, 5xx), the
+result is kept, the update is retried three times within ~5 s, and then every
+`RUNSTAGE_REPORT_RETRY_SECONDS` (default 60) in the background until it succeeds (up to 50
+attempts), so a check is not left "in progress". The job records `reportPending`,
+`reportAttempts` and `reportError` in the queue file.
+
 ### Migrating from the shared `RUNSTAGE_RUNNER_TOKEN`
 
 1. On the App machine, mint one token per runner: `npm run -s runner-token -- mint --id <id>`.
 2. On each runner, set `RUNSTAGE_RUNNER_TOKEN` to that runner's new token.
-3. Restart the App. Once `.runstage-gate-data/runners.json` exists, the old shared token is no
-   longer accepted. Until then the App still accepts it as runner `legacy-shared` and logs a
-   warning.
+3. Restart the App. The App requires the runners file and refuses to start without it; the
+   old shared-token fallback (runner `legacy-shared`) has been removed.
 
 The runner fetches missing PR commits with `git fetch origin <sha>`. Add `--allow-agents`
 only if you want agent checks to run (they also need `agents.enabled: true` in gate.yml and
@@ -223,8 +228,13 @@ for you. `npm run clean` removes the build output. CI runs `npm run build` on ev
   no gate config. The App's jobs only use the base commit's config, so merge
   `.runstage/gate.yml` into the base branch first. (Local `npm run gate -- run` falls back to
   your working tree with a warning.)
-- **`401 bad runner token`**: the token was rotated or revoked, or it's a legacy shared token
-  and a runners file now exists.
+- **`401 bad runner token`**: the token was rotated or revoked, or it's an old shared token
+  that was never minted into the runners file.
+- **App exits with `no runners registered`**: create the runners file with
+  `npm run -s runner-token -- mint --id <runner-id>`.
+- **`... symlinks that resolve outside .runstage/`**: a link under the base commit's
+  `.runstage/` points outside it (e.g. into `src/`), where the PR could change the target.
+  Replace it with a real file. The job fails as a runner error.
 - **`.runstage/... is not on the base commit`**: the check's script only exists in the PR.
   Scripts are loaded from the base, so merge the script (or the gate change) first.
 - **`commit ... not found`**: the runner's checkout cannot fetch the PR head (e.g. a fork).

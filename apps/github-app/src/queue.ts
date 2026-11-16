@@ -19,6 +19,10 @@ export interface JobStore {
   heartbeat(id: string, runnerId: string): JobOutcome;
   /** Store the result. Only the runner holding the claim may do this. */
   complete(id: string, runnerId: string, result: GateResult): JobOutcome;
+  /** Record the outcome of reporting a completed job's result to the provider. */
+  setReportState(id: string, state: { ok: boolean; error?: string; giveUp?: boolean }): GateJob | undefined;
+  /** Completed jobs whose final provider update is still owed. */
+  pendingReports(): GateJob[];
   /** Remember a webhook delivery id; returns false if it was already seen. */
   markDelivery(deliveryId: string): boolean;
   hasDelivery(deliveryId: string): boolean;
@@ -161,6 +165,27 @@ export class JobQueue implements JobStore {
     return { ok: true, job };
   }
 
+  setReportState(id: string, state: { ok: boolean; error?: string; giveUp?: boolean }): GateJob | undefined {
+    const job = this.jobs.find((j) => j.id === id);
+    if (!job || job.status !== "completed") return undefined;
+    if (state.ok) {
+      job.reportedAt = this.iso();
+      delete job.reportPending;
+      delete job.reportError;
+    } else {
+      job.reportAttempts = (job.reportAttempts ?? 0) + 1;
+      job.reportError = (state.error ?? "unknown error").slice(0, 500);
+      if (state.giveUp) delete job.reportPending;
+      else job.reportPending = true;
+    }
+    this.persist();
+    return job;
+  }
+
+  pendingReports(): GateJob[] {
+    return this.jobs.filter((j) => j.status === "completed" && j.reportPending);
+  }
+
   markDelivery(deliveryId: string): boolean {
     if (this.deliveries.includes(deliveryId)) return false;
     this.deliveries.push(deliveryId);
@@ -210,7 +235,8 @@ export class JobQueue implements JobStore {
   }
 
   private pruneCompleted(): void {
-    const completed = this.jobs.filter((j) => j.status === "completed");
+    // Jobs still owing a provider update are never pruned.
+    const completed = this.jobs.filter((j) => j.status === "completed" && !j.reportPending);
     const drop = new Set(completed.slice(0, Math.max(0, completed.length - this.keepCompleted)));
     if (drop.size) this.jobs = this.jobs.filter((j) => !drop.has(j));
   }
