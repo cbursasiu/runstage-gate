@@ -162,6 +162,9 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - History has single-tenant token auth only (no users, roles or multi-tenant isolation).
 - No npm publish yet. `npm run build` compiles every package to `dist/` (see below).
 - GitLab: commit-status provider and merge_request webhook ([docs/gitlab.md](docs/gitlab.md)), tested with mocks only; no approvals or fork MRs yet.
+- Security: signed App→runner jobs (HMAC, timestamp + nonce), checks run with a scrubbed env and,
+  on macOS, under `sandbox-exec` (no network, writes only in the job dir); secrets are redacted from
+  logs and posted output. Not a VM; limits in [docs/security.md](docs/security.md).
 
 ## Quick start
 
