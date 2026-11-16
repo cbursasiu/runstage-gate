@@ -155,7 +155,35 @@ The history service keeps a local JSON file (`HISTORY_DATA_FILE`) of finished ga
 Open <http://localhost:3100/> for a list of runs (filter by repo or verdict). Each run
 has a detail page with per-check results, failing output, and links to the GitHub PR
 and compare view. `GET /runs` and `GET /runs/:id` remain JSON (`GET /api/runs` is an
-alias). `POST /runs` still requires `RUNSTAGE_HISTORY_TOKEN` when that variable is set.
+alias).
+
+### History access tokens
+
+| Variable | Grants | Notes |
+| --- | --- | --- |
+| `RUNSTAGE_HISTORY_TOKEN` | write (`POST /runs`) and read | The App sends it as `Authorization: Bearer`. |
+| `RUNSTAGE_HISTORY_READ_TOKEN` | read only | Optional. For people or tools that only view history. |
+
+- **No token set**: everything is open (local dev only); the service logs a warning at startup.
+- **Any token set**: reads fail closed. API clients send `Authorization: Bearer <token>` and get
+  `401` without it. Browsers are redirected to `/login`, where you paste either token; that sets
+  an `HttpOnly; SameSite=Strict` session cookie (12 h, signed with the tokens, never containing
+  them). Rotating a token signs every browser out. **Sign out** is in the page header.
+- **Only the read token set**: `POST /runs` returns `403` (read-only mode).
+- Ten failed sign-ins from one address within five minutes get `429` for the rest of the window.
+- Over HTTPS, set `HISTORY_COOKIE_SECURE=1`.
+
+Generate tokens without printing them, for example:
+
+```bash
+mkdir -p ~/.config/runstage-gate && chmod 700 ~/.config/runstage-gate
+(umask 077; openssl rand -hex 32 > ~/.config/runstage-gate/history-token)
+(umask 077; openssl rand -hex 32 > ~/.config/runstage-gate/history-read-token)
+# then in .env:
+#   RUNSTAGE_HISTORY_TOKEN=<contents of history-token>
+#   RUNSTAGE_HISTORY_READ_TOKEN=<contents of history-read-token>
+curl -H "Authorization: Bearer $(cat ~/.config/runstage-gate/history-read-token)" http://localhost:3100/runs
+```
 
 HTML pages are served with a strict Content-Security-Policy (no scripts, inline CSS only),
 and every value from a run is HTML-escaped. `POST /runs` bodies are validated (bad shapes get

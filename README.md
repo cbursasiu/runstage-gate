@@ -144,6 +144,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - Durable job queue in a single JSON file (atomic writes) that survives restarts, with claim
   leases plus runner heartbeats (crashed runners' jobs are re-queued) and webhook de-duplication.
 - History service with a small web UI at `/`, `POST /runs` and `GET /runs` (JSON; `/api/runs` is an alias), in-memory or a JSON file.
+  Token auth: bearer tokens for the API, a sign-in form with an HttpOnly session cookie for browsers.
 - Tests for config parsing, gate evaluation, the webhook flow (Octokit mocked), the runner
   against temp git repos, and the history stub. End-to-end demo with `npm run demo`.
 
@@ -155,7 +156,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - Runs on every PR. Detecting "AI-generated" PRs (labels, bot authors, commit trailers) is
   not built yet.
 - `approvedBy` is always null: approve/override flow not built.
-- History has no auth on reads, no multi-tenant isolation and no UI.
+- History has single-tenant token auth only (no users, roles or multi-tenant isolation).
 - `check_run.requested_action` (custom check-run buttons) is not handled.
 - No npm publish yet. `npm run build` compiles every package to `dist/` (see below).
 - No GitLab provider yet (interface is ready).
