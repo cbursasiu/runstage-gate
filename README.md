@@ -143,7 +143,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
   complete it.
 - Durable job queue in a single JSON file (atomic writes) that survives restarts, with claim
   leases plus runner heartbeats (crashed runners' jobs are re-queued) and webhook de-duplication.
-- History stub with `POST /runs` and `GET /runs`, in-memory or a JSON file.
+- History service with a small web UI at `/`, `POST /runs` and `GET /runs` (JSON; `/api/runs` is an alias), in-memory or a JSON file.
 - Tests for config parsing, gate evaluation, the webhook flow (Octokit mocked), the runner
   against temp git repos, and the history stub. End-to-end demo with `npm run demo`.
 
@@ -184,7 +184,7 @@ Against real GitHub (dev App + smee.io + branch protection): see
 
 ```
 apps/github-app     webhook server, GitHub check runs, durable job queue, runner tokens, runner API
-apps/history        hosted history stub (GET /runs)
+apps/history        hosted history: web UI at `/`, JSON at `GET /runs`
 packages/core       gate.yml schema (zod + yaml), gate evaluation, shared types, CheckProvider
 packages/runner     runstage-gate CLI (run, poll)
 examples/           gate.yml and the no-todo-in-diff.sh check

@@ -77,4 +77,6 @@ export interface RunRecord {
   approvedBy: string | null;
   createdAt: string;
   completedAt: string;
+  /** Optional PR diff. Omitted on older records; the history service may truncate it. */
+  diff?: string;
 }

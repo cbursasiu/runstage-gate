@@ -64,7 +64,7 @@ npm run -s runner-token -- mint --id my-laptop --repo <owner>/<test-repo>
 # (--repo is optional and repeatable; without it the runner may claim jobs for any repo.)
 
 set -a; source .env; set +a
-npm run dev:history &       # optional: hosted history stub on :3100
+npm run dev:history &       # optional: history service on :3100 (UI at http://localhost:3100/)
 npm run dev:app             # App server on :3000
 ```
 
@@ -148,6 +148,20 @@ Repo → **Settings → Branches** (or **Rules → Rulesets**) → protect the d
 - Optionally enable **Require branches to be up to date before merging**.
 
 Now a failing RunStage Gate blocks the merge button.
+
+## Viewing run history
+
+The history service keeps a local JSON file (`HISTORY_DATA_FILE`) of finished gate runs.
+Open <http://localhost:3100/> for a list of runs (filter by repo or verdict). Each run
+has a detail page with per-check results, failing output, and links to the GitHub PR
+and compare view. `GET /runs` and `GET /runs/:id` remain JSON (`GET /api/runs` is an
+alias). `POST /runs` still requires `RUNSTAGE_HISTORY_TOKEN` when that variable is set.
+
+HTML pages are served with a strict Content-Security-Policy (no scripts, inline CSS only),
+and every value from a run is HTML-escaped. `POST /runs` bodies are validated (bad shapes get
+400, bodies over 2 MiB get 413) and any client-supplied `id` is ignored. A run's diff is only
+shown when the poster includes a `diff` field; the App does not send one today, so the detail
+page links to the GitHub compare and PR files views instead.
 
 ## Troubleshooting
 
