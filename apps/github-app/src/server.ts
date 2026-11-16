@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Webhooks } from "@octokit/webhooks";
 import type { GateResult } from "@runstage-gate/core";
-import { GateService, type CheckRunPayload, type CheckSuitePayload, type PullRequestPayload } from "./handlers.ts";
+import { GateService, type CheckRunPayload, type CheckSuitePayload, type IssueCommentPayload, type PullRequestPayload } from "./handlers.ts";
 import type { JobRefusal, JobStore } from "./queue.ts";
 import type { RunnerRegistry } from "./runners.ts";
 
@@ -26,6 +26,9 @@ export function createWebhooks(secret: string, service: GateService): Webhooks {
   });
   webhooks.on("pull_request", async ({ payload }) => {
     await service.onPullRequest(payload as unknown as PullRequestPayload);
+  });
+  webhooks.on("issue_comment", async ({ payload }) => {
+    await service.onIssueComment(payload as unknown as IssueCommentPayload);
   });
   return webhooks;
 }

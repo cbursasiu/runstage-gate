@@ -69,6 +69,10 @@ export interface GateJob {
   reportAttempts?: number;
   /** Last reporting error (for logs and inspection). */
   reportError?: string;
+  /** Who overrode a failed gate (GitHub login), when, and how. */
+  approvedBy?: string;
+  approvedAt?: string;
+  approvedVia?: "check_run_action" | "comment";
 }
 
 /** Record kept by the hosted history service (the paid part). */

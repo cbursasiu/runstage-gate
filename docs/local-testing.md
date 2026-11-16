@@ -43,7 +43,9 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
   - **Pull requests**: Read-only
   - (Metadata: Read-only is added automatically)
 - **Subscribe to events**: **Check suite**, **Check run**, **Pull request**
-  (**Check run** powers the **Re-run** button on the RunStage Gate check)
+  (**Check run** powers the **Re-run** and **Approve override** buttons on the RunStage Gate check)
+  - Optional, for the `/runstage approve` comment: **Issues: Read-only** permission plus the
+    **Issue comment** event (see [approvals.md](approvals.md))
 - **Where can this App be installed**: Only on this account
 
 After creating it:

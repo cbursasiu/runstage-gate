@@ -21,6 +21,10 @@ export interface JobStore {
   complete(id: string, runnerId: string, result: GateResult): JobOutcome;
   /** Record the outcome of reporting a completed job's result to the provider. */
   setReportState(id: string, state: { ok: boolean; error?: string; giveUp?: boolean }): GateJob | undefined;
+  /** Record an approval (override) on a completed job. */
+  approve(id: string, login: string, via: NonNullable<GateJob["approvedVia"]>): GateJob | undefined;
+  /** The newest job for a commit, any status. */
+  latestFor(repoFullName: string, headSha: string): GateJob | undefined;
   /** Completed jobs whose final provider update is still owed. */
   pendingReports(): GateJob[];
   /** Remember a webhook delivery id; returns false if it was already seen. */
@@ -180,6 +184,25 @@ export class JobQueue implements JobStore {
     }
     this.persist();
     return job;
+  }
+
+  approve(id: string, login: string, via: NonNullable<GateJob["approvedVia"]>): GateJob | undefined {
+    const job = this.jobs.find((j) => j.id === id);
+    if (!job || job.status !== "completed") return undefined;
+    job.approvedBy = login;
+    job.approvedAt = this.iso();
+    job.approvedVia = via;
+    this.persist();
+    return job;
+  }
+
+  latestFor(repoFullName: string, headSha: string): GateJob | undefined {
+    this.requeueExpired();
+    for (let i = this.jobs.length - 1; i >= 0; i--) {
+      const j = this.jobs[i]!;
+      if (j.change.repoFullName === repoFullName && j.change.headSha === headSha) return j;
+    }
+    return undefined;
   }
 
   pendingReports(): GateJob[] {
