@@ -4,3 +4,4 @@ export * from "./fsutil.ts";
 export * from "./github-provider.ts";
 export * from "./handlers.ts";
 export * from "./server.ts";
+export * from "./gitlab.ts";

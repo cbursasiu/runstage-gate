@@ -59,7 +59,7 @@ flowchart LR
     end
     Core["packages/core<br/>gate.yml schema, evaluation,<br/>CheckProvider interface"]
     GitHub[(GitHub)] <--> App
-    GitLab[(GitLab - later)] -.-> App
+    GitLab[(GitLab)] <-.-> App
     App <--> Runner
     App --> Hist
     Runner --> Scripts
@@ -69,8 +69,8 @@ flowchart LR
 ```
 
 The code host sits behind a small `CheckProvider` interface (`startCheck`, `completeCheck`)
-in `packages/core`. GitHub uses Check Runs. GitLab can be added later with external commit
-statuses (all tiers) or Ultimate external status checks, without touching the runner.
+in `packages/core`. GitHub uses Check Runs. GitLab uses external commit statuses (all tiers),
+which needed no runner changes ([docs/gitlab.md](docs/gitlab.md)).
 
 ## Defining checks: `.runstage/gate.yml`
 
@@ -159,7 +159,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
   user with write access (see [docs/approvals.md](docs/approvals.md)). Refusals are only logged.
 - History has single-tenant token auth only (no users, roles or multi-tenant isolation).
 - No npm publish yet. `npm run build` compiles every package to `dist/` (see below).
-- No GitLab provider yet (interface is ready).
+- GitLab: commit-status provider and merge_request webhook ([docs/gitlab.md](docs/gitlab.md)), tested with mocks only; no approvals or fork MRs yet.
 
 ## Quick start
 

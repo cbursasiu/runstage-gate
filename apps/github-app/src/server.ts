@@ -4,6 +4,7 @@ import type { GateResult } from "@runstage-gate/core";
 import { GateService, type CheckRunPayload, type CheckSuitePayload, type IssueCommentPayload, type PullRequestPayload } from "./handlers.ts";
 import type { JobRefusal, JobStore } from "./queue.ts";
 import type { RunnerRegistry } from "./runners.ts";
+import { changeFromMergeRequest, verifyGitLabToken, type GitLabMergeRequestPayload, type GitLabStatusProvider } from "./gitlab.ts";
 
 export interface AppServerOptions {
   webhookSecret: string;
@@ -12,6 +13,8 @@ export interface AppServerOptions {
   service: GateService;
   queue: JobStore;
   log?: (line: string) => void;
+  /** GitLab merge_request webhooks at POST /webhooks/gitlab. Omit to disable (404). */
+  gitlab?: { webhookSecret: string; provider: Pick<GitLabStatusProvider, "branchHead"> };
 }
 
 const MAX_BODY = 5 * 1024 * 1024;
@@ -36,6 +39,7 @@ export function createWebhooks(secret: string, service: GateService): Webhooks {
 /**
  * HTTP surface:
  *   POST /webhooks                       GitHub webhooks (signature verified)
+ *   POST /webhooks/gitlab                GitLab merge_request webhooks (X-Gitlab-Token), when configured
  *   POST /api/runner/jobs/next           runner claims a job under a lease (204 when none)
  *   POST /api/runner/jobs/:id/heartbeat  runner extends its lease while checks run
  *   POST /api/runner/jobs/:id/result     runner posts a GateResult (only the claiming runner)
@@ -69,6 +73,27 @@ export function createAppServer(opts: AppServerOptions): Server {
         // Recorded only after handling succeeded, so a failed delivery can be retried.
         if (delivery) opts.queue.markDelivery(delivery);
         return send(res, 202, { ok: true });
+      }
+
+      if (req.method === "POST" && url.pathname === "/webhooks/gitlab") {
+        if (!opts.gitlab) return send(res, 404, { error: "not found" });
+        const body = await readBody(req);
+        if (!verifyGitLabToken(header(req, "x-gitlab-token"), opts.gitlab.webhookSecret)) return send(res, 401, { error: "bad token" });
+        const event = header(req, "x-gitlab-event") ?? "?";
+        const uuid = header(req, "x-gitlab-event-uuid");
+        const delivery = uuid ? `gitlab:${uuid}` : undefined;
+        if (delivery && opts.queue.hasDelivery(delivery)) {
+          log(`gitlab webhook ${event} ${uuid}: duplicate delivery, ignored`);
+          return send(res, 200, { ok: true, duplicate: true });
+        }
+        log(`gitlab webhook ${event} ${uuid ?? "unknown"}`);
+        const payload = JSON.parse(body) as GitLabMergeRequestPayload;
+        if (event !== "Merge Request Hook" || payload.object_kind !== "merge_request") return send(res, 202, { ok: true, ignored: true });
+        const { change, skip } = await changeFromMergeRequest(payload, (p, b) => opts.gitlab!.provider.branchHead(p, b));
+        if (change) await opts.service.requestGate(change);
+        else log(`gitlab merge_request !${payload.object_attributes?.iid ?? "?"}: skipped (${skip})`);
+        if (delivery) opts.queue.markDelivery(delivery);
+        return send(res, 202, { ok: true, ...(skip ? { ignored: true } : {}) });
       }
 
       if (url.pathname.startsWith("/api/runner/")) {
