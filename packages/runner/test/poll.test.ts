@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { signedJobResponse } from "./helpers.ts";
 import { poll } from "../src/index.ts";
 
 const job = {
@@ -14,7 +15,7 @@ describe("poll", () => {
     const calls: string[] = [];
     const fetchImpl = (async (url: string) => {
       calls.push(new URL(url).pathname);
-      if (url.endsWith("/jobs/next")) return new Response(JSON.stringify(job), { status: 200 });
+      if (url.endsWith("/jobs/next")) return signedJobResponse(job, "t");
       return new Response(JSON.stringify({ error: "job is claimed by another runner" }), { status: 403 });
     }) as typeof fetch;
     const logs: string[] = [];
@@ -29,7 +30,7 @@ describe("poll", () => {
     const calls: string[] = [];
     const fetchImpl = (async (url: string) => {
       calls.push(new URL(url).pathname);
-      if (url.endsWith("/jobs/next")) return new Response(JSON.stringify(job), { status: 200 });
+      if (url.endsWith("/jobs/next")) return signedJobResponse(job, "t");
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
     const runGateImpl = async () => {

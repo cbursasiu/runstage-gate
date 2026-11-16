@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { jobSigningKeyFromHash } from "@runstage-gate/core";
 import { writeJsonAtomic } from "./fsutil.ts";
 
 /** One registered runner. Only the SHA-256 of its token is stored. */
@@ -19,6 +20,8 @@ export interface RunnersFile {
 export interface RunnerIdentity {
   id: string;
   repos: string[] | null;
+  /** Key for signing jobs handed to this runner (derived from its token hash; see core/signing.ts). */
+  signingKey: Buffer;
 }
 
 const RUNNER_ID = /^[A-Za-z0-9._-]{1,64}$/;
@@ -65,7 +68,9 @@ export class RunnerRegistry {
       const want = Buffer.from(e.tokenSha256, "hex");
       if (want.length === got.length && timingSafeEqual(want, got)) match = e;
     }
-    return match ? { id: match.id, repos: match.repos?.length ? [...match.repos] : null } : undefined;
+    return match
+      ? { id: match.id, repos: match.repos?.length ? [...match.repos] : null, signingKey: jobSigningKeyFromHash(match.tokenSha256) }
+      : undefined;
   }
 
   list(): RunnerEntry[] {

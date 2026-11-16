@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Webhooks } from "@octokit/webhooks";
-import type { GateResult } from "@runstage-gate/core";
+import { JOB_SIGNATURE_HEADER, signJob, type GateResult } from "@runstage-gate/core";
 import { GateService, type CheckRunPayload, type CheckSuitePayload, type IssueCommentPayload, type PullRequestPayload } from "./handlers.ts";
 import type { JobRefusal, JobStore } from "./queue.ts";
 import type { RunnerRegistry } from "./runners.ts";
@@ -44,7 +44,10 @@ export function createWebhooks(secret: string, service: GateService): Webhooks {
  *   POST /api/runner/jobs/:id/heartbeat  runner extends its lease while checks run
  *   POST /api/runner/jobs/:id/result     runner posts a GateResult (only the claiming runner)
  * Runner calls authenticate with `Authorization: Bearer <per-runner token>`; the runner id comes
- * from the token, never from a header.
+ * from the token, never from a header. Claimed jobs carry an `x-runstage-job-signature` HMAC
+ * (key derived from the runner's token, timestamp + nonce) that the runner verifies before running.
+ * GitHub webhooks: X-Hub-Signature-256 (HMAC-SHA256, constant-time compare in @octokit/webhooks).
+ * GitLab webhooks: X-Gitlab-Token (constant-time compare). Missing or bad -> 400/401, never handled.
  *   GET  /healthz
  */
 export function createAppServer(opts: AppServerOptions): Server {
@@ -107,7 +110,10 @@ export function createAppServer(opts: AppServerOptions): Server {
             return;
           }
           log(`runner ${runner.id} claimed job ${job.id} (attempt ${job.attempts ?? 1})`);
-          return send(res, 200, job);
+          // Signed, so the runner can verify the job really came from this App (core/signing.ts).
+          const body = JSON.stringify(job);
+          res.writeHead(200, { "content-type": "application/json", [JOB_SIGNATURE_HEADER]: signJob(body, runner.signingKey) }).end(body);
+          return;
         }
         const m = /^\/api\/runner\/jobs\/([^/]+)\/(result|heartbeat)$/.exec(url.pathname);
         if (req.method === "POST" && m) {

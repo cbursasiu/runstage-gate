@@ -1,3 +1,4 @@
+import { JOB_SIGNATURE_HEADER, jobSigningKeyFromToken, signJob } from "@runstage-gate/core";
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,4 +53,13 @@ export function makeTempRepo(gateYml?: string): TempRepo {
       return g("rev-parse", "HEAD");
     },
   };
+}
+
+/** A /jobs/next response signed the way the App signs it, for runner token `token`. */
+export function signedJobResponse(job: unknown, token: string, o: { now?: number; nonce?: string } = {}): Response {
+  const body = JSON.stringify(job);
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/json", [JOB_SIGNATURE_HEADER]: signJob(body, jobSigningKeyFromToken(token), o) },
+  });
 }

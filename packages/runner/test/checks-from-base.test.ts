@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { gatePathsIn, poll, runGate } from "../src/index.ts";
-import { makeTempRepo } from "./helpers.ts";
+import { makeTempRepo, signedJobResponse } from "./helpers.ts";
 
 const SCRIPT = ".runstage/checks/no-todo-in-diff.sh";
 const TODO_CHANGE = "export const x = 1;\n// TODO: skip validation for now\n";
@@ -129,7 +129,7 @@ describe("gate config must come from the base commit", () => {
     };
     const posted: Array<{ conclusion: string; title: string; summary: string }> = [];
     const fetchImpl = (async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/jobs/next")) return new Response(JSON.stringify(job), { status: 200 });
+      if (url.endsWith("/jobs/next")) return signedJobResponse(job, "t");
       if (url.endsWith("/result")) posted.push(JSON.parse(String(init!.body)));
       return new Response("{}", { status: 200 });
     }) as typeof fetch;

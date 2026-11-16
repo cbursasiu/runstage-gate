@@ -1,4 +1,4 @@
-import { CHECK_NAME, type ChangeRef, type CheckProvider, type GateJob, type GateResult } from "@runstage-gate/core";
+import { CHECK_NAME, Redactor, secretValuesFromEnv, type ChangeRef, type CheckProvider, type GateJob, type GateResult } from "@runstage-gate/core";
 import type { JobOutcome, JobStore } from "./queue.ts";
 import { APPROVE_ACTION_ID } from "./github-provider.ts";
 
@@ -23,6 +23,11 @@ export interface GateServiceDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Enables approvals (override a failed gate). See docs/approvals.md. */
   approvals?: ApprovalDeps;
+  /**
+   * Scrubs secrets from runner results before they are stored, posted to the provider or sent
+   * to history, and from log lines. Default: token patterns plus secret-looking env values.
+   */
+  redactor?: Redactor;
 }
 
 export interface ApprovalDeps {
@@ -115,10 +120,14 @@ export class GateService {
    */
   private readonly inFlight = new Map<string, Promise<GateJob>>();
 
-  constructor(private readonly deps: GateServiceDeps) {}
+  private readonly redactor: Redactor;
+
+  constructor(private readonly deps: GateServiceDeps) {
+    this.redactor = deps.redactor ?? new Redactor(secretValuesFromEnv());
+  }
 
   private log(line: string) {
-    (this.deps.log ?? (() => {}))(line);
+    (this.deps.log ?? (() => {}))(this.redactor.redact(line));
   }
 
   async onCheckSuite(p: CheckSuitePayload): Promise<GateJob | undefined> {
@@ -232,7 +241,9 @@ export class GateService {
   }
 
   /** Called when a runner posts its result. Only the runner holding the claim may complete it. */
-  async completeJob(jobId: string, runnerId: string, result: GateResult): Promise<JobOutcome> {
+  async completeJob(jobId: string, runnerId: string, rawResult: GateResult): Promise<JobOutcome> {
+    // Defense in depth: the runner already redacts; the App redacts again with its own secrets.
+    const result = this.redactor.redactResult(rawResult);
     const outcome = this.deps.queue.complete(jobId, runnerId, result);
     if (!outcome.ok) {
       this.log(`runner ${runnerId} result for job ${jobId} refused: ${outcome.reason}`);

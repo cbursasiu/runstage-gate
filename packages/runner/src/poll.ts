@@ -1,5 +1,14 @@
 import { hostname } from "node:os";
-import type { GateJob, GateResult } from "@runstage-gate/core";
+import {
+  JOB_SIGNATURE_HEADER,
+  NonceCache,
+  Redactor,
+  jobSigningKeyFromToken,
+  secretValuesFromEnv,
+  verifyJobSignature,
+  type GateJob,
+  type GateResult,
+} from "@runstage-gate/core";
 import { runGate } from "./execute.ts";
 
 export interface PollOptions {
@@ -26,6 +35,19 @@ export interface PollOptions {
   backoffMs?: (attempt: number) => number;
   /** Attempts to post a result before giving up on it (the job's lease then re-queues it). Default 6. */
   resultAttempts?: number;
+  /** Max clock difference / age of a job signature. Default 5 minutes. */
+  signatureMaxAgeMs?: number;
+}
+
+/** The server handed out a job whose signature did not verify; the runner stops rather than run it. */
+export class JobSignatureError extends Error {
+  constructor(readonly reason: string) {
+    super(
+      `refusing job: signature ${reason}. The runner only runs jobs signed by the RunStage Gate App ` +
+        "with a key derived from this runner's token (check --server, the token, and that both clocks are in sync).",
+    );
+    this.name = "JobSignatureError";
+  }
 }
 
 const defaultBackoff = (attempt: number) => Math.min(1000 * 2 ** (attempt - 1), 60_000);
@@ -47,7 +69,11 @@ async function call(f: typeof fetch, url: string, init: RequestInit): Promise<Re
 /** Ask the server for the next job, run it locally, post the result. Returns jobs processed. */
 export async function poll(opts: PollOptions): Promise<number> {
   const f = opts.fetchImpl ?? fetch;
-  const log = opts.log ?? ((l: string) => console.log(l));
+  // Everything the runner logs or posts is scrubbed of its own token and other known secrets.
+  const redactor = new Redactor([opts.token, ...secretValuesFromEnv()]);
+  const log = redactor.wrapLog(opts.log ?? ((l: string) => console.log(l)));
+  const signingKey = jobSigningKeyFromToken(opts.token);
+  const nonces = new NonceCache();
   const runnerId = opts.runnerId ?? `${hostname()}-${process.pid}`;
   const headers = { authorization: `Bearer ${opts.token}`, "content-type": "application/json", "x-runner-id": runnerId };
   const server = opts.server.replace(/\/$/, "");
@@ -77,7 +103,13 @@ export async function poll(opts: PollOptions): Promise<number> {
       continue;
     }
     if (!res.ok) throw new Error(`server error ${res.status}: ${await res.text()}`);
-    const job = (await res.json()) as GateJob;
+    const body = await res.text();
+    const sig = verifyJobSignature(body, res.headers.get(JOB_SIGNATURE_HEADER), signingKey, {
+      maxAgeMs: opts.signatureMaxAgeMs,
+      nonces,
+    });
+    if (!sig.ok) throw new JobSignatureError(sig.reason);
+    const job = JSON.parse(body) as GateJob;
     log(`job ${job.id}: ${job.change.repoFullName}#${job.change.prNumber ?? "?"} ${job.change.headSha.slice(0, 7)}`);
 
     // Keep the claim alive while checks run; if the lease lapses the server re-queues the job.
@@ -111,6 +143,7 @@ export async function poll(opts: PollOptions): Promise<number> {
       }
     }
     clearInterval(heartbeat);
+    result = redactor.redactResult(result);
     log(`job ${job.id}: ${result.conclusion} - ${result.title}`);
     const post = await postResult(f, `${server}/api/runner/jobs/${encodeURIComponent(job.id)}/result`, headers, result, {
       attempts: opts.resultAttempts ?? 6,

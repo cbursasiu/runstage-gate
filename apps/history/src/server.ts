@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { GateConclusion } from "@runstage-gate/core";
+import { Redactor, secretValuesFromEnv, type GateConclusion } from "@runstage-gate/core";
 import type { RunStore, RunListFilter } from "./store.ts";
 import { renderDetailPage, renderListPage, renderLoginPage, renderNotFoundPage, wantsHtml } from "./html.ts";
 import { HistoryAuth, safeNext, type HistoryAuthOptions } from "./auth.ts";
@@ -10,6 +10,9 @@ const MAX_LOGIN_BODY_BYTES = 8 * 1024;
 
 /** POST /runs bodies larger than this are refused with 413. Diffs are capped separately by the store. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
+/** Scrubs token patterns and secret-looking env values from stored runs (see core/redact.ts). */
+const redactor = new Redactor(secretValuesFromEnv());
 
 /** Locks HTML pages down: no scripts, no external loads, no framing, inline CSS only. */
 const HTML_SECURITY_HEADERS = {
@@ -74,7 +77,8 @@ function handle(store: RunStore, auth: HistoryAuth, req: IncomingMessage, res: S
       }
       const result = parseNewRun(parsed);
       if (!result.ok) return sendJson(res, 400, { error: result.error });
-      sendJson(res, 201, store.add(result.run));
+      // Defense in depth: the App already redacts results; history scrubs again before storing.
+      sendJson(res, 201, store.add(redactor.redactDeep(result.run)));
     });
   }
 

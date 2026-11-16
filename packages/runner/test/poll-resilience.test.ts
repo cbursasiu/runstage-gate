@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { signedJobResponse } from "./helpers.ts";
 import { poll } from "../src/index.ts";
 
 const job = {
@@ -22,7 +23,7 @@ describe("poll resilience", () => {
         nextCalls++;
         if (nextCalls === 1) throw new TypeError("fetch failed");
         if (nextCalls === 2) return new Response("bad gateway", { status: 502 });
-        if (nextCalls === 3) return new Response(JSON.stringify(job), { status: 200 });
+        if (nextCalls === 3) return signedJobResponse(job, "t");
         controller.abort();
         return new Response(null, { status: 204 });
       }
@@ -68,7 +69,7 @@ describe("poll resilience", () => {
   it("retries posting a result through transient failures", async () => {
     let posts = 0;
     const fetchImpl = (async (url: string) => {
-      if (url.endsWith("/jobs/next")) return new Response(JSON.stringify(job), { status: 200 });
+      if (url.endsWith("/jobs/next")) return signedJobResponse(job, "t");
       if (url.endsWith("/result")) {
         posts++;
         if (posts === 1) throw new TypeError("fetch failed");
@@ -86,7 +87,7 @@ describe("poll resilience", () => {
   it("gives up on a result after the configured attempts without crashing", async () => {
     let posts = 0;
     const fetchImpl = (async (url: string) => {
-      if (url.endsWith("/jobs/next")) return new Response(JSON.stringify(job), { status: 200 });
+      if (url.endsWith("/jobs/next")) return signedJobResponse(job, "t");
       if (url.endsWith("/result")) { posts++; throw new TypeError("fetch failed"); }
       return new Response("{}", { status: 200 });
     }) as typeof fetch;

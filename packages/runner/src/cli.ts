@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { Redactor, secretValuesFromEnv } from "@runstage-gate/core";
 import { runGate } from "./execute.ts";
 import { poll } from "./poll.ts";
 
@@ -15,7 +16,13 @@ run   Local dry run: evaluates the gate for base..head and prints the verdict.
       Exit code 0 = pass, 1 = blocked, 2 = usage/config error.
 poll  Fetches jobs from the RunStage Gate server, runs them and posts results.
       The token (this runner's own, from \`npm run -s runner-token -- mint\`)
-      defaults to $RUNSTAGE_RUNNER_TOKEN.
+      defaults to $RUNSTAGE_RUNNER_TOKEN. Jobs must carry a valid signature from
+      the App (key derived from the token); unsigned or replayed jobs are refused.
+
+Isolation (runner env, see docs/security.md):
+  RUNSTAGE_SANDBOX=auto|required|off     macOS sandbox-exec for checks (default auto)
+  RUNSTAGE_SANDBOX_NETWORK=none|loopback|all   network inside the sandbox (default none)
+  RUNSTAGE_CHECK_ENV_PASSTHROUGH=A,B      extra env names passed to checks (never secrets)
 `;
 
 export async function main(argv: string[]): Promise<number> {
@@ -52,7 +59,7 @@ export async function main(argv: string[]): Promise<number> {
         // Local dry runs may use the working-tree gate.yml if the base has none (with a warning).
         allowWorkingTreeConfig: true,
         allowAgents: values["allow-agents"],
-        log: values.json ? undefined : (l) => console.log(l),
+        log: values.json ? undefined : new Redactor(secretValuesFromEnv()).wrapLog((l) => console.log(l)),
       });
       if (values.json) console.log(JSON.stringify(result, null, 2));
       else console.log(`\n${result.conclusion === "success" ? "PASS" : "BLOCKED"}: ${result.title}`);

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { App } from "@octokit/app";
+import { Redactor, secretValuesFromEnv } from "@runstage-gate/core";
 import { GitHubApprovals, GitHubCheckProvider, type ApprovalClient, type ChecksClient } from "./github-provider.ts";
 import { GitLabStatusProvider, ProviderRouter } from "./gitlab.ts";
 import { GateService, HttpHistorySink } from "./handlers.ts";
@@ -22,7 +23,10 @@ const app = new App({
   webhooks: { secret: env("GITHUB_WEBHOOK_SECRET") },
 });
 
-const log = (l: string) => console.log(`[app] ${l}`);
+// Every log line and every runner result is scrubbed of secrets this process knows about
+// (webhook secret, GitLab/history tokens and other secret-looking env values) and token patterns.
+const redactor = new Redactor(secretValuesFromEnv());
+const log = redactor.wrapLog((l: string) => console.log(`[app] ${l}`));
 
 // Durable queue: one JSON file, rewritten atomically. Survives restarts; claims have a lease.
 const queueFile = process.env.RUNSTAGE_QUEUE_FILE ?? ".runstage-gate-data/queue.json";
@@ -70,6 +74,7 @@ const service = new GateService({
       })
     : undefined,
   queue,
+  redactor,
   appId: Number(env("GITHUB_APP_ID")),
   history: process.env.RUNSTAGE_HISTORY_URL
     ? new HttpHistorySink(process.env.RUNSTAGE_HISTORY_URL, process.env.RUNSTAGE_HISTORY_TOKEN)
