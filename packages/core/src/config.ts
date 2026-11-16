@@ -60,14 +60,14 @@ export const gateConfigSchema = z
     const seen = new Set<string>();
     cfg.checks.forEach((c, i) => {
       if (seen.has(c.name)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate check name "${c.name}"`, path: ["checks", i, "name"] });
+        ctx.addIssue({ code: "custom", message: `duplicate check name "${c.name}"`, path: ["checks", i, "name"] });
       }
       seen.add(c.name);
     });
     cfg.ai_detection.policy.require_checks.forEach((name, i) => {
       if (!seen.has(name)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: `unknown check "${name}"`,
           path: ["ai_detection", "policy", "require_checks", i],
         });
