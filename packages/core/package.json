@@ -6,10 +6,16 @@
   "type": "module",
   "description": "Gate config schema, evaluation, shared types and the provider interface.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "runstage-dist": "./dist/index.js",
+      "default": "./src/index.ts"
+    }
   },
   "dependencies": {
     "yaml": "^2.8.0",
     "zod": "^3.25.0"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json"
   }
 }

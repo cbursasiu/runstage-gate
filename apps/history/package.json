@@ -6,11 +6,15 @@
   "type": "module",
   "description": "Stub of the hosted run history service (the paid part).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "runstage-dist": "./dist/index.js",
+      "default": "./src/index.ts"
+    }
   },
   "scripts": {
     "dev": "tsx watch src/main.ts",
-    "start": "tsx src/main.ts"
+    "start": "node --conditions=runstage-dist dist/main.js",
+    "build": "tsc -b tsconfig.build.json"
   },
   "dependencies": {
     "@runstage-gate/core": "0.1.0"
