@@ -2,14 +2,20 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { Webhooks } from "@octokit/webhooks";
 import { vi } from "vitest";
-import type { ChecksClient } from "../src/index.ts";
+import type { ChecksClient, CreateCheckParams, UpdateCheckParams } from "../src/index.ts";
 
 export function mockChecksClient() {
-  const create = vi.fn(async (_p: Parameters<ChecksClient["rest"]["checks"]["create"]>[0]) => ({ data: { id: 314 } }));
-  const update = vi.fn(async (_p: Parameters<ChecksClient["rest"]["checks"]["update"]>[0]) => ({}));
-  const client: ChecksClient = { rest: { checks: { create, update } } };
+  const create = vi.fn(async (_p: CreateCheckParams) => ({ data: { id: 314 } }));
+  const update = vi.fn(async (_p: UpdateCheckParams) => ({ data: {} }));
+  const request: ChecksClient["request"] = async (route, params) => {
+    if (route === "POST /repos/{owner}/{repo}/check-runs") return create(params as CreateCheckParams);
+    if (route === "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}") return update(params as UpdateCheckParams);
+    throw new Error(`unexpected route ${route satisfies never}`);
+  };
+  const requestSpy = vi.fn(request);
+  const client: ChecksClient = { request: requestSpy };
   const factory = vi.fn(async (_installationId: number) => client);
-  return { client, create, update, factory };
+  return { client, create, update, request: requestSpy, factory };
 }
 
 export async function listen(server: Server): Promise<string> {

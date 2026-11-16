@@ -22,6 +22,8 @@ import {
   createAppServer,
   mintRunnerToken,
   type ChecksClient,
+  type CreateCheckParams,
+  type UpdateCheckParams,
 } from "../apps/github-app/src/index.ts";
 import { RunStore, createHistoryServer } from "../apps/history/src/index.ts";
 import { makeTempRepo } from "../packages/runner/test/helpers.ts";
@@ -40,20 +42,21 @@ const RUNNER_TOKEN = mintRunnerToken(join(DATA_DIR, "runners.json"), "demo-runne
 let nextCheckId = 1000;
 const githubCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
 const mockGitHub: ChecksClient = {
-  rest: {
-    checks: {
-      async create(params) {
-        githubCalls.push({ method: "checks.create", params });
-        console.log(`${c.dim}[mock GitHub] checks.create name="${params.name}" status=${params.status} head=${params.head_sha.slice(0, 7)}${c.reset}`);
-        return { data: { id: ++nextCheckId } };
-      },
-      async update(params) {
-        githubCalls.push({ method: "checks.update", params });
-        const color = params.conclusion === "success" ? c.green : c.red;
-        console.log(`${c.dim}[mock GitHub]${c.reset} checks.update id=${params.check_run_id} ${color}conclusion=${params.conclusion}${c.reset} title="${params.output.title}"`);
-        return {};
-      },
-    },
+  async request(route, params) {
+    if (route === "POST /repos/{owner}/{repo}/check-runs") {
+      const p = params as CreateCheckParams;
+      githubCalls.push({ method: "checks.create", params: p });
+      console.log(`${c.dim}[mock GitHub] checks.create name="${p.name}" status=${p.status} head=${p.head_sha.slice(0, 7)}${c.reset}`);
+      return { data: { id: ++nextCheckId } };
+    }
+    if (route === "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}") {
+      const p = params as UpdateCheckParams;
+      githubCalls.push({ method: "checks.update", params: p });
+      const color = p.conclusion === "success" ? c.green : c.red;
+      console.log(`${c.dim}[mock GitHub]${c.reset} checks.update id=${p.check_run_id} ${color}conclusion=${p.conclusion}${c.reset} title="${p.output.title}"`);
+      return { data: {} };
+    }
+    throw new Error(`unexpected route ${route satisfies never}`);
   },
 };
 
