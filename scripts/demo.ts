@@ -157,7 +157,7 @@ async function main() {
   step("Result");
   const updates = githubCalls.filter((x) => x.method === "checks.update").map((x) => x.params.conclusion);
   const ok = updates.length === 2 && updates[0] === "failure" && updates[1] === "success" && runs.length === 2 && fleetOk;
-  console.log(ok ? `${c.green}${c.bold}DEMO OK${c.reset}: blocked the TODO, passed the fix, recorded 2 runs, fleet view green.` : `${c.red}DEMO FAILED${c.reset} ${JSON.stringify(updates)}`);
+  console.log(ok ? `${c.green}${c.bold}DEMO OK${c.reset}: blocked the TODO, passed the fix, recorded 2 runs.` : `${c.red}DEMO FAILED${c.reset} ${JSON.stringify(updates)}`);
 
   rmSync(repo.dir, { recursive: true, force: true });
   rmSync(DATA_DIR, { recursive: true, force: true });
