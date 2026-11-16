@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { App } from "@octokit/app";
 import { GitHubApprovals, GitHubCheckProvider, type ApprovalClient, type ChecksClient } from "./github-provider.ts";
+import { GitLabStatusProvider, ProviderRouter } from "./gitlab.ts";
 import { GateService, HttpHistorySink } from "./handlers.ts";
 import { JobQueue } from "./queue.ts";
 import { loadRunnerRegistry, type RunnerRegistry } from "./runners.ts";
@@ -43,10 +44,26 @@ try {
 }
 // Approvals (override a failed gate): on unless RUNSTAGE_APPROVALS=0. See docs/approvals.md.
 const approvalsEnabled = process.env.RUNSTAGE_APPROVALS !== "0";
+// Optional GitLab commit-status provider (docs/gitlab.md): needs both token and webhook secret.
+const gitlabToken = process.env.RUNSTAGE_GITLAB_TOKEN;
+const gitlabSecret = process.env.RUNSTAGE_GITLAB_WEBHOOK_SECRET;
+if (!!gitlabToken !== !!gitlabSecret) {
+  console.error("GitLab needs both RUNSTAGE_GITLAB_TOKEN and RUNSTAGE_GITLAB_WEBHOOK_SECRET (or neither)");
+  process.exit(2);
+}
+const gitlab =
+  gitlabToken && gitlabSecret
+    ? new GitLabStatusProvider({
+        baseUrl: process.env.RUNSTAGE_GITLAB_URL ?? "https://gitlab.com",
+        token: gitlabToken,
+        targetUrl: process.env.RUNSTAGE_GITLAB_TARGET_URL || undefined,
+      })
+    : undefined;
+const github = new GitHubCheckProvider(async (id) => (await app.getInstallationOctokit(id)) as ChecksClient, {
+  approvalButton: approvalsEnabled,
+});
 const service = new GateService({
-  provider: new GitHubCheckProvider(async (id) => (await app.getInstallationOctokit(id)) as ChecksClient, {
-    approvalButton: approvalsEnabled,
-  }),
+  provider: gitlab ? new ProviderRouter({ github, gitlab }) : github,
   approvals: approvalsEnabled
     ? Object.assign(new GitHubApprovals(async (id) => (await app.getInstallationOctokit(id)) as unknown as ApprovalClient), {
         allowSelfApproval: process.env.RUNSTAGE_APPROVALS_ALLOW_SELF !== "0",
@@ -74,6 +91,7 @@ createAppServer({
   service,
   queue,
   log,
+  gitlab: gitlab && gitlabSecret ? { webhookSecret: gitlabSecret, provider: gitlab } : undefined,
 }).listen(port, () =>
   log(`RunStage Gate App listening on :${port} (POST /webhooks); queue ${queueFile}, ${runners.list().length} runner(s), lease ${leaseSeconds}s`),
 );
