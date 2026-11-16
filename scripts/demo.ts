@@ -67,13 +67,16 @@ async function listen(server: Server): Promise<string> {
 
 async function main() {
   step("Start history stub and GitHub App server (Octokit mocked)");
-  const history = createHistoryServer(new RunStore());
+  // Demo-only tokens: writes need the write token, reads (UI + JSON) need either token.
+  const historyWriteToken = randomBytes(16).toString("hex");
+  const historyReadToken = randomBytes(16).toString("hex");
+  const history = createHistoryServer(new RunStore(), { writeToken: historyWriteToken, readToken: historyReadToken });
   const historyUrl = await listen(history);
   const queue = JobQueue.file(join(DATA_DIR, "queue.json"));
   const service = new GateService({
     provider: new GitHubCheckProvider(async () => mockGitHub),
     queue,
-    history: new HttpHistorySink(historyUrl),
+    history: new HttpHistorySink(historyUrl, historyWriteToken),
     log: (l) => console.log(`${c.dim}[app] ${l}${c.reset}`),
   });
   const app = createAppServer({
@@ -138,7 +141,8 @@ async function main() {
   await runRunner();
 
   step("Hosted history (GET /runs)");
-  const runs = (await (await fetch(`${historyUrl}/runs`)).json()) as Array<{ headSha: string; conclusion: string; title: string }>;
+  if ((await fetch(`${historyUrl}/runs`)).status !== 401) throw new Error("history reads should need a token");
+  const runs = (await (await fetch(`${historyUrl}/runs`, { headers: { authorization: `Bearer ${historyReadToken}` } })).json()) as Array<{ headSha: string; conclusion: string; title: string }>;
   for (const r of runs) console.log(`${r.headSha.slice(0, 7)}  ${r.conclusion.padEnd(7)}  ${r.title}`);
 
   step("Result");

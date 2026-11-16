@@ -58,11 +58,14 @@ describe("history stub", () => {
       expect((await post(run)).status).toBe(201);
       expect((await post({ ...run, prNumber: 43, conclusion: "success" })).status).toBe(201);
 
-      const all = (await (await fetch(`${url}/runs`)).json()) as Array<{ prNumber: number }>;
+      // Reads fail closed once a token is configured.
+      expect((await fetch(`${url}/runs`)).status).toBe(401);
+      const auth = { headers: { authorization: "Bearer hist-token" } };
+      const all = (await (await fetch(`${url}/runs`, auth)).json()) as Array<{ prNumber: number }>;
       expect(all.map((r) => r.prNumber)).toEqual([43, 42]);
-      const one = (await (await fetch(`${url}/runs?pr=42`)).json()) as Array<{ id: string }>;
+      const one = (await (await fetch(`${url}/runs?pr=42`, auth)).json()) as Array<{ id: string }>;
       expect(one).toHaveLength(1);
-      expect((await fetch(`${url}/runs/${one[0]!.id}`)).status).toBe(200);
+      expect((await fetch(`${url}/runs/${one[0]!.id}`, auth)).status).toBe(200);
     } finally {
       server.close();
     }
