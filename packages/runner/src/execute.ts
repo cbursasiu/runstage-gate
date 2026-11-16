@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lstat, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -17,6 +17,16 @@ import {
   type ScriptCheck,
 } from "@runstage-gate/core";
 import { commitMessages, diffForChange, ensureCommits, git, pathExistsAt } from "./git.ts";
+import { scrubbedCheckEnv } from "./check-env.ts";
+import {
+  PROTECTED_HOME_PATHS,
+  sandboxAvailable,
+  sandboxProfile,
+  sandboxSettingsFromEnv,
+  sandboxedBash,
+  type SandboxSettings,
+} from "./sandbox.ts";
+import { homedir } from "node:os";
 
 export interface RunOptions {
   repo: string;
@@ -36,6 +46,25 @@ export interface RunOptions {
   /** Try `git fetch origin <sha>` for missing commits. */
   fetch?: boolean;
   log?: (line: string) => void;
+  /** Sandbox settings. Default: from the runner's env (RUNSTAGE_SANDBOX, RUNSTAGE_SANDBOX_NETWORK). */
+  sandbox?: SandboxSettings;
+  /** The runner's environment that check envs are filtered from. Default process.env. */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** How checks of one gate run are isolated. */
+interface Isolation {
+  /** True when checks run under sandbox-exec. */
+  sandboxed: boolean;
+  settings: SandboxSettings;
+  /** Set when mode is "required" but the sandbox is unavailable: every check errors with this. */
+  refuse?: string;
+  /** Why checks run unsandboxed (mode off, or auto on a host without sandbox-exec). */
+  warning?: string;
+  /** Real paths checks may write to. */
+  writable: string[];
+  home: string;
+  tmp: string;
 }
 
 const OUTPUT_LIMIT = 8_000;
@@ -80,19 +109,26 @@ export async function runGate(opts: RunOptions): Promise<GateResult> {
   const policyRequired = new Set(ai?.generated ? config.ai_detection.policy.require_checks : []);
 
   // Checks run against a clean worktree of the head commit, never the user's checkout.
-  const work = await mkdtemp(join(tmpdir(), "runstage-gate-"));
+  // realpath: on macOS tmpdir() is under /var, a symlink to /private/var; the sandbox needs real paths.
+  const work = await realpath(await mkdtemp(join(tmpdir(), "runstage-gate-")));
   const tree = join(work, "tree");
   const diffFile = join(work, "change.diff");
   await writeFile(diffFile, diff);
   await git(opts.repo, ["worktree", "add", "--detach", "--quiet", tree, opts.head]);
   try {
     await pinGateDirToBase(opts.repo, tree, opts.base);
+    const isolation = await prepareIsolation(opts, work, tree);
+    if (isolation.refuse) log(`! ${isolation.refuse}`);
+    else if (isolation.warning) log(`! WARNING: ${isolation.warning}`);
+    else log(`sandbox: on (network: ${isolation.settings.network})`);
     const results: CheckResult[] = [];
     for (const configured of config.checks) {
       // AI policy: listed checks become required for AI-generated changes.
       const check = policyRequired.has(configured.name) ? { ...configured, required: true } : configured;
       log(`▶ ${check.name} (${check.type})`);
-      let r = await runCheck(check, config, { ...opts, tree, diffFile, diff, ai });
+      let r = isolation.refuse
+        ? errorResult(check, isolation.refuse)
+        : await runCheck(check, config, { ...opts, tree, diffFile, diff, ai, isolation });
       if (policyRequired.has(check.name) && r.status === "skipped") {
         // A check the AI policy requires must actually run; skipping it would quietly weaken the gate.
         r = { ...r, status: "error", reason: `required for AI-generated changes but skipped: ${r.reason}` };
@@ -109,7 +145,8 @@ export async function runGate(opts: RunOptions): Promise<GateResult> {
         reason: "AI-generated change: needs approval (Approve override button or a /runstage approve comment)",
       });
     }
-    return evaluateGate(results, { ai });
+    const verdict = evaluateGate(results, { ai });
+    return { ...verdict, summary: `${verdict.summary}\n\n${isolationNote(isolation)}` };
   } finally {
     await git(opts.repo, ["worktree", "remove", "--force", tree]).catch(() => {});
     await rm(work, { recursive: true, force: true });
@@ -121,6 +158,64 @@ interface CheckContext extends RunOptions {
   diffFile: string;
   diff: string;
   ai?: AiDetection;
+  isolation: Isolation;
+}
+
+async function prepareIsolation(opts: RunOptions, work: string, tree: string): Promise<Isolation> {
+  const settings = opts.sandbox ?? sandboxSettingsFromEnv(opts.env ?? process.env);
+  const home = join(work, "home");
+  const tmp = join(work, "tmp");
+  await mkdir(home, { recursive: true });
+  await mkdir(tmp, { recursive: true });
+  // The worktree's own admin dir (<repo>/.git/worktrees/<name>): git writes its index and HEAD
+  // there. The shared .git (objects, refs, hooks, config) stays read-only.
+  const adminDir = await realpath((await git(tree, ["rev-parse", "--absolute-git-dir"])).trim());
+  const writable = [work, adminDir];
+  const base = { settings, writable, home, tmp };
+  if (settings.mode === "off") {
+    return { ...base, sandboxed: false, warning: "checks run UNSANDBOXED (RUNSTAGE_SANDBOX=off): PR code has the runner user's file and network access" };
+  }
+  if (!sandboxAvailable()) {
+    const why = `sandbox-exec is not available on this host (${process.platform})`;
+    if (settings.mode === "required") return { ...base, sandboxed: false, refuse: `sandbox required (RUNSTAGE_SANDBOX=required) but ${why}; checks were not run` };
+    return { ...base, sandboxed: false, warning: `checks run UNSANDBOXED: ${why}. Set RUNSTAGE_SANDBOX=required to refuse instead` };
+  }
+  return { ...base, sandboxed: true };
+}
+
+function isolationNote(i: Isolation): string {
+  if (i.refuse) return `> ⚠️ **Sandbox**: ${i.refuse}.`;
+  if (!i.sandboxed) return `> ⚠️ **Sandbox**: ${i.warning}.`;
+  return `> 🔒 Checks ran in a macOS sandbox (writes limited to the job's temp worktree; network: ${i.settings.network}).`;
+}
+
+function errorResult(check: CheckDefinition, reason: string): CheckResult {
+  return { name: check.name, kind: check.type, required: check.required, status: "error", exitCode: null, durationMs: 0, output: "", reason };
+}
+
+/** How to start `bash -c <command>` for a check: sandboxed or not, with which env. */
+function launcher(command: string, ctx: CheckContext, gateEnv: Record<string, string>, kind: "script" | "agent") {
+  const i = ctx.isolation;
+  const source = ctx.env ?? process.env;
+  let env = scrubbedCheckEnv(source, { home: i.home, tmp: i.tmp, gate: gateEnv });
+  let writable = i.writable;
+  let network = i.settings.network;
+  let protectedReads = PROTECTED_HOME_PATHS.map((p) => join(homedir(), p));
+  if (kind === "agent") {
+    // Agent CLIs (claude, codex) need their own login state and API access: real HOME, network,
+    // and the agent's config dirs; plus names the runner owner lists in RUNSTAGE_AGENT_ENV_PASSTHROUGH.
+    env = { ...env, HOME: homedir() };
+    for (const name of (source.RUNSTAGE_AGENT_ENV_PASSTHROUGH ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      if (source[name] !== undefined) env[name] = source[name];
+    }
+    const agentDirs = [".claude", ".claude.json", ".codex", ".config/claude"].map((p) => join(homedir(), p));
+    writable = [...writable, ...agentDirs];
+    network = "all";
+    protectedReads = protectedReads.filter((p) => !agentDirs.includes(p));
+  }
+  if (!i.sandboxed) return { cmd: "bash", args: ["-c", command], env };
+  const { cmd, args } = sandboxedBash(command, sandboxProfile({ writable, network, protectedReads }));
+  return { cmd, args, env };
 }
 
 async function detectForChange(config: GateConfig, opts: RunOptions): Promise<AiDetection> {
@@ -136,8 +231,8 @@ async function detectForChange(config: GateConfig, opts: RunOptions): Promise<Ai
 }
 
 async function runCheck(check: CheckDefinition, config: GateConfig, ctx: CheckContext): Promise<CheckResult> {
-  const env = {
-    ...process.env,
+  // Only these gate variables plus an allowlist (check-env.ts) reach the check; never the runner's env.
+  const env: Record<string, string> = {
     RUNSTAGE_BASE: ctx.base,
     RUNSTAGE_HEAD: ctx.head,
     RUNSTAGE_REPO: ctx.tree,
@@ -242,10 +337,11 @@ async function missingOnBase(
   return undefined;
 }
 
-async function runScript(check: ScriptCheck, ctx: CheckContext, env: NodeJS.ProcessEnv): Promise<CheckResult> {
+async function runScript(check: ScriptCheck, ctx: CheckContext, gateEnv: Record<string, string>): Promise<CheckResult> {
   const missing = await missingOnBase(check.run, check, "script", ctx);
   if (missing) return missing;
-  const r = await exec("bash", ["-c", check.run], { cwd: ctx.tree, env, timeoutMs: check.timeout_seconds * 1000 });
+  const l = launcher(check.run, ctx, gateEnv, "script");
+  const r = await exec(l.cmd, l.args, { cwd: ctx.tree, env: l.env, timeoutMs: check.timeout_seconds * 1000 });
   return toResult(check.name, "script", check.required, r);
 }
 
@@ -254,7 +350,7 @@ const AGENT_COMMANDS: Record<Exclude<AgentCheck["agent"], "custom">, string> = {
   codex: "codex exec -",
 };
 
-async function runAgent(check: AgentCheck, config: GateConfig, ctx: CheckContext, env: NodeJS.ProcessEnv): Promise<CheckResult> {
+async function runAgent(check: AgentCheck, config: GateConfig, ctx: CheckContext, gateEnv: Record<string, string>): Promise<CheckResult> {
   const skip = (reason: string): CheckResult => ({
     name: check.name, kind: "agent", required: check.required, status: "skipped", reason, exitCode: null, durationMs: 0, output: "",
   });
@@ -265,13 +361,15 @@ async function runAgent(check: AgentCheck, config: GateConfig, ctx: CheckContext
   const missing = await missingOnBase(command, check, "agent", ctx);
   if (missing) return missing;
   const bin = command.split(/\s+/)[0]!;
-  const which = await exec("bash", ["-c", `command -v ${JSON.stringify(bin)}`], { cwd: ctx.tree, env, timeoutMs: 5000 });
+  const w = launcher(`command -v ${JSON.stringify(bin)}`, ctx, gateEnv, "agent");
+  const which = await exec(w.cmd, w.args, { cwd: ctx.tree, env: w.env, timeoutMs: 5000 });
   if (which.code !== 0) return skip(`${bin} is not installed on this runner`);
 
   const input =
     `${check.prompt}\n\nEnd your answer with a line "VERDICT: PASS" or "VERDICT: FAIL: <reason>".\n\n` +
     `--- PR diff ---\n${ctx.diff}`;
-  const r = await exec("bash", ["-c", command], { cwd: ctx.tree, env, input, timeoutMs: check.timeout_seconds * 1000 });
+  const l = launcher(command, ctx, gateEnv, "agent");
+  const r = await exec(l.cmd, l.args, { cwd: ctx.tree, env: l.env, input, timeoutMs: check.timeout_seconds * 1000 });
   const verdict = /VERDICT:\s*(PASS|FAIL)(?::\s*(.*))?/i.exec(r.output.split("\n").reverse().find((l) => /VERDICT:/i.test(l)) ?? "");
   if (r.code === 0 && verdict?.[1]?.toUpperCase() === "FAIL") {
     return { ...toResult(check.name, "agent", check.required, r), status: "failed", reason: `agent verdict: ${verdict[2]?.trim() || "FAIL"}` };
