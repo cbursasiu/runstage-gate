@@ -33,10 +33,17 @@ export const aiDetectionSchema = z
         require_approval: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .default({ require_checks: [], require_approval: false }),
   })
   .strict()
-  .default({});
+  .default({
+    enabled: false,
+    commit_trailers: true,
+    branch_prefixes: DEFAULT_AI_BRANCH_PREFIXES,
+    labels: DEFAULT_AI_LABELS,
+    markers: [],
+    policy: { require_checks: [], require_approval: false },
+  });
 
 export type AiDetectionConfig = z.infer<typeof aiDetectionSchema>;
 
