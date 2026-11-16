@@ -13,10 +13,10 @@ function sampleCheck(over: Partial<CheckResult> = {}): CheckResult {
     kind: "script",
     required: true,
     status: "failed",
-    reason: "new TODO lines",
+    reason: "new leftover markers",
     exitCode: 1,
     durationMs: 120,
-    output: "README.md:3: TODO fix this",
+    output: "README.md:3: leftover marker",
     ...over,
   };
 }
@@ -164,7 +164,7 @@ describe("history HTML UI", () => {
 
   it("renders a run detail page with checks, failing output and GitHub diff links", async () => {
     const store = new RunStore();
-    const run = store.add(sampleRun({ diff: "diff --git a/README.md b/README.md\n+TODO" }));
+    const run = store.add(sampleRun({ diff: "diff --git a/README.md b/README.md\n+leftover" }));
     const { server, url } = await listen(store);
     try {
       const res = await fetch(`${url}/runs/${run.id}`, { headers: HTML });
@@ -180,9 +180,9 @@ describe("history HTML UI", () => {
       expect(html).toContain("no-todo-in-diff");
       expect(html).toContain("script");
       expect(html).toContain("yes");
-      expect(html).toContain("new TODO lines");
+      expect(html).toContain("new leftover markers");
       expect(html).toContain("120ms");
-      expect(html).toContain("README.md:3: TODO fix this");
+      expect(html).toContain("README.md:3: leftover marker");
       expect(html).toContain("diff --git a/README.md b/README.md");
       expect(html).toContain("mac-dev");
       expect(html).toContain("/api/runs/" + run.id);
