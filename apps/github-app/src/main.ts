@@ -3,7 +3,7 @@ import { App } from "@octokit/app";
 import { GitHubCheckProvider, type ChecksClient } from "./github-provider.ts";
 import { GateService, HttpHistorySink } from "./handlers.ts";
 import { JobQueue } from "./queue.ts";
-import { RunnerRegistry, hashToken } from "./runners.ts";
+import { loadRunnerRegistry, type RunnerRegistry } from "./runners.ts";
 import { createAppServer } from "./server.ts";
 
 function env(name: string): string {
@@ -35,13 +35,10 @@ const queue = JobQueue.file(queueFile, { leaseMs: leaseSeconds * 1000 });
 // Per-runner tokens: a JSON file of runner ids and SHA-256 token hashes (npm run -s runner-token -- mint --id <id>).
 const runnersFile = process.env.RUNSTAGE_RUNNERS_FILE ?? ".runstage-gate-data/runners.json";
 let runners: RunnerRegistry;
-if (existsSync(runnersFile)) {
-  runners = RunnerRegistry.fromFile(runnersFile);
-} else if (process.env.RUNSTAGE_RUNNER_TOKEN) {
-  log("WARNING: using the legacy shared RUNSTAGE_RUNNER_TOKEN as runner 'legacy-shared'. Mint per-runner tokens (see docs/local-testing.md).");
-  runners = RunnerRegistry.fromEntries([{ id: "legacy-shared", tokenSha256: hashToken(process.env.RUNSTAGE_RUNNER_TOKEN) }]);
-} else {
-  console.error(`no runners registered: ${runnersFile} not found. Run: npm run -s runner-token -- mint --id <runner-id>`);
+try {
+  runners = loadRunnerRegistry(runnersFile);
+} catch (err) {
+  console.error((err as Error).message);
   process.exit(2);
 }
 const service = new GateService({
@@ -53,6 +50,13 @@ const service = new GateService({
     : undefined,
   log,
 });
+
+// Check runs whose final update failed after the job completed are retried in the background.
+const retryTimer = setInterval(() => {
+  void service.retryPendingReports();
+}, Number(process.env.RUNSTAGE_REPORT_RETRY_SECONDS ?? 60) * 1000);
+retryTimer.unref();
+void service.retryPendingReports();
 
 const port = Number(process.env.PORT ?? 3000);
 createAppServer({

@@ -58,6 +58,17 @@ export interface GateJob {
   completedAt?: string;
   runnerId?: string;
   result?: GateResult;
+  /** When the provider check was last updated with the final result. */
+  reportedAt?: string;
+  /**
+   * True while the final provider update (e.g. GitHub check run PATCH) is still owed: the
+   * runner's result is stored, but reporting it failed. The App retries in the background.
+   */
+  reportPending?: boolean;
+  /** Failed attempts to report the final result to the provider. */
+  reportAttempts?: number;
+  /** Last reporting error (for logs and inspection). */
+  reportError?: string;
 }
 
 /** Record kept by the hosted history service (the paid part). */

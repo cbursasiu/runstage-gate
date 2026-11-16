@@ -12,6 +12,14 @@ export interface GateServiceDeps {
   log?: (line: string) => void;
   /** This GitHub App's id. When set, check_run events for other apps' check runs are ignored. */
   appId?: number;
+  /**
+   * Delays between inline attempts to report a finished job to the provider (completeCheck).
+   * Default [1000, 4000]: three attempts within ~5s before handing over to background retries.
+   */
+  reportRetryDelaysMs?: number[];
+  /** Total failed report attempts (inline + background) before giving up on a job. Default 50. */
+  maxReportAttempts?: number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** Minimal shapes of the webhook payloads we read (subset of @octokit/webhooks types). */
@@ -169,12 +177,70 @@ export class GateService {
       return outcome;
     }
     const job = outcome.job;
-    await this.deps.provider.completeCheck(job.change, job.externalCheckId, result);
-    this.log(`completed job ${job.id}: ${result.conclusion} (${result.title})`);
+    // The result is stored first, so a provider outage never loses it or leaves the job
+    // completable twice. Reporting is retried inline, then in the background.
+    const reported = await this.reportInline(job, result);
+    this.log(`completed job ${job.id}: ${result.conclusion} (${result.title})${reported ? "" : " - check update pending retry"}`);
     if (this.deps.history) {
       await this.deps.history.record(job).catch((err) => this.log(`history: ${(err as Error).message}`));
     }
     return outcome;
+  }
+  private retrying = false;
+
+  /** Report a finished job to the provider, retrying with backoff. Records the outcome on the job. */
+  private async reportInline(job: GateJob, result: GateResult): Promise<boolean> {
+    const delays = this.deps.reportRetryDelaysMs ?? [1000, 4000];
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      if (attempt > 0) await sleep(delays[attempt - 1]!);
+      if (await this.tryReport(job, result, `attempt ${attempt + 1}`)) return true;
+      if (!this.deps.queue.get(job.id)?.reportPending) return false; // gave up
+    }
+    return false;
+  }
+
+  /** One provider update. On failure the job is marked reportPending (or given up after maxReportAttempts). */
+  private async tryReport(job: GateJob, result: GateResult, label: string): Promise<boolean> {
+    try {
+      await this.deps.provider.completeCheck(job.change, job.externalCheckId, result);
+      this.deps.queue.setReportState(job.id, { ok: true });
+      return true;
+    } catch (err) {
+      const message = (err as Error).message;
+      const max = this.deps.maxReportAttempts ?? 50;
+      const attempts = (this.deps.queue.get(job.id)?.reportAttempts ?? 0) + 1;
+      const giveUp = attempts >= max;
+      this.deps.queue.setReportState(job.id, { ok: false, error: message, giveUp });
+      this.log(`job ${job.id}: updating check ${job.externalCheckId} failed (${label}): ${message}${giveUp ? ` - giving up after ${max} attempts` : ""}`);
+      return false;
+    }
+  }
+
+  /**
+   * Retry the final check update for completed jobs whose report failed (e.g. GitHub was down),
+   * so a check is never left "in progress" after its result arrived. main.ts runs this on a timer.
+   * Returns how many checks were updated.
+   */
+  async retryPendingReports(): Promise<number> {
+    if (this.retrying) return 0;
+    this.retrying = true;
+    let done = 0;
+    try {
+      for (const job of this.deps.queue.pendingReports()) {
+        if (!job.result) {
+          this.deps.queue.setReportState(job.id, { ok: false, error: "no stored result", giveUp: true });
+          continue;
+        }
+        if (await this.tryReport(job, job.result, "background retry")) {
+          this.log(`job ${job.id}: check ${job.externalCheckId} updated on retry`);
+          done++;
+        }
+      }
+    } finally {
+      this.retrying = false;
+    }
+    return done;
   }
 }
 

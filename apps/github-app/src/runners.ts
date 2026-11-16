@@ -73,6 +73,23 @@ export class RunnerRegistry {
   }
 }
 
+/**
+ * The App's runner registry. The runners file is required: the old shared-token fallback
+ * (RUNSTAGE_RUNNER_TOKEN on the App as runner "legacy-shared") was removed.
+ */
+export function loadRunnerRegistry(file: string): RunnerRegistry {
+  if (!existsSync(file)) {
+    throw new Error(
+      `no runners registered: ${file} not found. Mint a per-runner token with ` +
+        "`npm run -s runner-token -- mint --id <runner-id>` and set it as RUNSTAGE_RUNNER_TOKEN on that runner. " +
+        "(The App no longer accepts a shared RUNSTAGE_RUNNER_TOKEN.)",
+    );
+  }
+  const registry = RunnerRegistry.fromFile(file);
+  if (registry.list().length === 0) throw new Error(`no runners registered in ${file}. Mint one with \`npm run -s runner-token -- mint --id <runner-id>\`.`);
+  return registry;
+}
+
 export function readRunnersFile(file: string): RunnersFile {
   if (!existsSync(file)) return { version: 1, runners: [] };
   let raw: RunnersFile;
