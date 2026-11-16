@@ -110,4 +110,13 @@ export interface RunRecord {
   /** AI-generated detection result, when enabled in gate.yml. */
   aiGenerated?: boolean;
   aiSignals?: string[];
+  /** Code host that reported the run. Omitted on older records (treated as GitHub). */
+  provider?: "github" | "gitlab";
+  /** Provider-specific id of the check (GitHub check run id). Omitted on older records. */
+  externalCheckId?: string;
+  /**
+   * Web link to the provider's check for this run: the GitHub check run page, or the GitLab
+   * merge request (commit statuses have no page of their own). Omitted on older records.
+   */
+  checkUrl?: string;
 }

@@ -162,7 +162,8 @@ The history service keeps a local JSON file (`HISTORY_DATA_FILE`) of finished ga
 Open <http://localhost:3100/> for a list of runs (filter by repo or verdict). Each run
 has a detail page with per-check results, failing output, and links to the GitHub PR
 and compare view. `GET /runs` and `GET /runs/:id` remain JSON (`GET /api/runs` is an
-alias).
+alias). <http://localhost:3100/fleet> is the fleet dashboard (one row per repo); see
+[dashboard.md](dashboard.md).
 
 ### History access tokens
 

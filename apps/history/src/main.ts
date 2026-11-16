@@ -1,6 +1,7 @@
 import { RunStore } from "./store.ts";
 import { createHistoryServer } from "./server.ts";
 import { HistoryAuth } from "./auth.ts";
+import { entitlements, isUnknownPlan } from "./entitlements.ts";
 
 const port = Number(process.env.HISTORY_PORT ?? 3100);
 const store = new RunStore(process.env.HISTORY_DATA_FILE);
@@ -16,6 +17,8 @@ if (auth.open) {
 } else if (!auth.writesEnabled) {
   console.warn("[history] RUNSTAGE_HISTORY_TOKEN is not set: POST /runs is disabled (read-only mode).");
 }
-createHistoryServer(store, auth).listen(port, () =>
-  console.log(`[history] listening on :${port} (GET / UI, GET /runs JSON; auth ${auth.open ? "off" : "on"})`),
+const ent = entitlements(process.env);
+if (isUnknownPlan(process.env.RUNSTAGE_PLAN)) console.warn("[history] RUNSTAGE_PLAN is not 'free' or 'plus'; using the free plan.");
+createHistoryServer(store, auth, { entitlements: ent }).listen(port, () =>
+  console.log(`[history] listening on :${port} (GET / UI, GET /fleet, GET /runs JSON; plan ${ent.plan}; auth ${auth.open ? "off" : "on"})`),
 );
