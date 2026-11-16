@@ -19,6 +19,29 @@ export interface PollOptions {
   runGateImpl?: typeof runGate;
   log?: (line: string) => void;
   signal?: AbortSignal;
+  /**
+   * Delay before retry number `attempt` (1-based) after the server is unreachable or returns 5xx,
+   * e.g. while the App restarts. Default: 1s, 2s, 4s ... capped at 60s.
+   */
+  backoffMs?: (attempt: number) => number;
+  /** Attempts to post a result before giving up on it (the job's lease then re-queues it). Default 6. */
+  resultAttempts?: number;
+}
+
+const defaultBackoff = (attempt: number) => Math.min(1000 * 2 ** (attempt - 1), 60_000);
+
+/** Network failure (fetch threw) or a 5xx: worth retrying. */
+class TransientError extends Error {}
+
+async function call(f: typeof fetch, url: string, init: RequestInit): Promise<Response> {
+  let res: Response;
+  try {
+    res = await f(url, init);
+  } catch (err) {
+    throw new TransientError(`server unreachable: ${(err as Error).message}`);
+  }
+  if (res.status >= 500) throw new TransientError(`server error ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res;
 }
 
 /** Ask the server for the next job, run it locally, post the result. Returns jobs processed. */
@@ -29,9 +52,24 @@ export async function poll(opts: PollOptions): Promise<number> {
   const headers = { authorization: `Bearer ${opts.token}`, "content-type": "application/json", "x-runner-id": runnerId };
   const server = opts.server.replace(/\/$/, "");
   let processed = 0;
+  const backoff = opts.backoffMs ?? defaultBackoff;
+  let failures = 0;
 
   while (!opts.signal?.aborted) {
-    const res = await f(`${server}/api/runner/jobs/next`, { method: "POST", headers, body: "{}" });
+    let res: Response;
+    try {
+      res = await call(f, `${server}/api/runner/jobs/next`, { method: "POST", headers, body: "{}" });
+    } catch (err) {
+      // Keep polling through App restarts and outages instead of exiting.
+      if (!(err instanceof TransientError) || opts.once) throw err;
+      failures++;
+      const wait = backoff(failures);
+      log(`${err.message}; retrying in ${Math.round(wait / 1000)}s`);
+      await sleep(wait, opts.signal);
+      continue;
+    }
+    if (failures) log(`server reachable again after ${failures} failed attempt(s)`);
+    failures = 0;
     if (res.status === 401) throw new Error("server rejected the runner token");
     if (res.status === 204) {
       if (opts.once) return processed;
@@ -74,22 +112,48 @@ export async function poll(opts: PollOptions): Promise<number> {
     }
     clearInterval(heartbeat);
     log(`job ${job.id}: ${result.conclusion} - ${result.title}`);
-    const post = await f(`${server}/api/runner/jobs/${encodeURIComponent(job.id)}/result`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(result),
+    const post = await postResult(f, `${server}/api/runner/jobs/${encodeURIComponent(job.id)}/result`, headers, result, {
+      attempts: opts.resultAttempts ?? 6,
+      backoff,
+      log: (l) => log(`job ${job.id}: ${l}`),
+      signal: opts.signal,
     });
-    if (post.status === 401) throw new Error("server rejected the runner token");
-    if ([403, 404, 409].includes(post.status)) {
+    if (post?.status === 401) throw new Error("server rejected the runner token");
+    if (post && [403, 404, 409].includes(post.status)) {
       // The lease lapsed and another runner took the job, or it was already finished: not fatal.
       log(`job ${job.id}: server refused the result (${post.status}): ${await post.text()}`);
-    } else if (!post.ok) {
+    } else if (post && !post.ok) {
       throw new Error(`posting result failed ${post.status}: ${await post.text()}`);
     }
     processed++;
     if (opts.once) return processed;
   }
   return processed;
+}
+
+/** Post a result, retrying transient failures. Returns undefined if every attempt failed. */
+async function postResult(
+  f: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+  result: GateResult,
+  o: { attempts: number; backoff: (attempt: number) => number; log: (line: string) => void; signal?: AbortSignal },
+): Promise<Response | undefined> {
+  for (let attempt = 1; attempt <= o.attempts; attempt++) {
+    try {
+      return await call(f, url, { method: "POST", headers, body: JSON.stringify(result) });
+    } catch (err) {
+      if (!(err instanceof TransientError)) throw err;
+      if (attempt === o.attempts || o.signal?.aborted) {
+        o.log(`posting result failed after ${attempt} attempt(s): ${err.message}. The job's lease will expire and it will be re-queued.`);
+        return undefined;
+      }
+      const wait = o.backoff(attempt);
+      o.log(`posting result: ${err.message}; retrying in ${Math.round(wait / 1000)}s`);
+      await sleep(wait, o.signal);
+    }
+  }
+  return undefined;
 }
 
 function errorResult(message: string): GateResult {

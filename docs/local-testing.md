@@ -223,7 +223,8 @@ for you. `npm run clean` removes the build output. CI runs `npm run build` on ev
   added after install (accept the updated permissions on the installation page).
 - **Check stuck on "Waiting for a runner"**: no runner is polling, the runner's token isn't
   in the runners file (`npm run -s runner-token -- list`), or the runner's `--repo` scope
-  doesn't include this repo. A job claimed by a runner that died is re-queued when its lease
+  doesn't include this repo. Restarting the App doesn't stop `gate poll`: it logs
+  `server unreachable ... retrying in Ns` and resumes when the App is back. A job claimed by a runner that died is re-queued when its lease
   expires. Click **Re-run** on the check (or **Re-run all checks**) to queue a fresh run;
   for single-check re-runs the App must be subscribed to **Check run** events.
 - **Check says `.runstage/gate.yml not found on the base commit`**: the PR's base branch has
