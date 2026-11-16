@@ -157,7 +157,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
 - `approvedBy` is always null: approve/override flow not built.
 - History has no auth on reads, no multi-tenant isolation and no UI.
 - `check_run.requested_action` (custom check-run buttons) is not handled.
-- No compiled build or npm publish; the runner runs through `tsx`.
+- No npm publish yet. `npm run build` compiles every package to `dist/` (see below).
 - No GitLab provider yet (interface is ready).
 
 ## Quick start

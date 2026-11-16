@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/core/tsconfig.build.json"
+    },
+    {
+      "path": "./packages/runner/tsconfig.build.json"
+    },
+    {
+      "path": "./apps/github-app/tsconfig.build.json"
+    },
+    {
+      "path": "./apps/history/tsconfig.build.json"
+    }
+  ]
+}

@@ -163,6 +163,24 @@ and every value from a run is HTML-escaped. `POST /runs` bodies are validated (b
 shown when the poster includes a `diff` field; the App does not send one today, so the detail
 page links to the GitHub compare and PR files views instead.
 
+## Compiled build (no tsx at runtime)
+
+`npm run dev:*`, `npm test`, `npm run demo` and `npm run typecheck` run the TypeScript sources
+directly. To run compiled JavaScript instead:
+
+```bash
+npm run build                 # tsc -b: packages/*/dist and apps/*/dist (gitignored)
+set -a; source .env; set +a
+npm run start:history &       # node --conditions=runstage-dist apps/history/dist/main.js
+npm run start:app             # node --conditions=runstage-dist apps/github-app/dist/main.js
+npm run gate:dist -- poll --server http://localhost:3000 --repo <path>   # compiled runner
+```
+
+Each workspace package exports `dist/index.js` under the `runstage-dist` condition and its
+TypeScript source otherwise, so dev tools never pick up a stale `dist/`. The start scripts and
+the runner bin (`packages/runner/bin/runstage-gate.js`) pass `--conditions=runstage-dist`
+for you. `npm run clean` removes the build output. CI runs `npm run build` on every push.
+
 ## Troubleshooting
 
 - **401 bad signature**: the webhook secret in `.env` does not match the App settings.

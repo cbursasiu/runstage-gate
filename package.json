@@ -16,13 +16,18 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.build.json",
+    "clean": "tsc -b tsconfig.build.json --clean",
     "test": "vitest run",
     "test:watch": "vitest",
     "demo": "tsx scripts/demo.ts",
     "dev:app": "npm run dev -w @runstage-gate/github-app",
     "dev:history": "npm run dev -w @runstage-gate/history",
     "gate": "tsx packages/runner/src/cli.ts",
-    "runner-token": "tsx scripts/runner-token.ts"
+    "runner-token": "tsx scripts/runner-token.ts",
+    "start:app": "npm run start -w @runstage-gate/github-app",
+    "start:history": "npm run start -w @runstage-gate/history",
+    "gate:dist": "node --conditions=runstage-dist packages/runner/bin/runstage-gate.js"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
