@@ -67,4 +67,21 @@ describe("PR metadata for AI detection", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("sends the provider, check run id and check run URL to history (fleet links)", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const job: GateJob = {
+        id: "j", externalCheckId: "314", status: "completed", createdAt: "2026-11-16T00:00:00.000Z",
+        change: { provider: "github", repoFullName: "a/b", headSha: "h", baseSha: "b", prNumber: 1 },
+        result: { conclusion: "failure", title: "1 failed", summary: "x", checks: [] },
+      };
+      await new HttpHistorySink("http://history.test", "w").record(job);
+      const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+      expect(body).toMatchObject({ provider: "github", externalCheckId: "314", checkUrl: "https://github.com/a/b/runs/314" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

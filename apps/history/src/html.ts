@@ -1,4 +1,5 @@
 import type { CheckResult, GateConclusion, RunRecord } from "@runstage-gate/core";
+import type { FleetLinkKind, FleetView } from "./fleet.ts";
 
 const REPO_RE = /^(?!\.+\/)[A-Za-z0-9_.-]+\/(?!\.+$)[A-Za-z0-9_.-]+$/;
 const SHA_RE = /^[0-9a-fA-F]{1,64}$/;
@@ -159,6 +160,15 @@ pre.output, pre.diff {
 .login label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #656d76; margin: 0 0 12px; }
 .login input { font: inherit; padding: 6px 8px; border: 1px solid #d0d7de; border-radius: 6px; }
 .login .error { color: #b42318; margin: 0 0 12px; }
+.nav { margin: 6px 0 0; font-size: 13px; }
+.badge.passing { background: #dafbe1; color: #0a7d32; }
+.badge.failing { background: #ffebe9; color: #b42318; }
+.badge.pending { background: #fff8c5; color: #7d4e00; }
+.badge.neutral { background: #eaeef2; color: #656d76; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot.green { background: #1a7f37; } .dot.red { background: #cf222e; } .dot.yellow { background: #bf8700; } .dot.grey { background: #8c959f; }
+.notice { margin: 0 0 16px; padding: 12px 16px; background: #ddf4ff; border: 1px solid #54aeff; border-radius: 8px; }
+.plan { margin: 0 0 12px; color: #656d76; }
 `.trim();
 
 /** Per-request page chrome. */
@@ -184,6 +194,7 @@ function layout(title: string, body: string, opts: PageOptions = {}): string {
     ${signOutForm(opts)}
     <h1><a href="/">RunStage Gate</a></h1>
     <p>Run history</p>
+    <nav class="nav"><a href="/">Runs</a> · <a href="/fleet">Fleet</a></nav>
   </header>
   <main>
 ${body}
@@ -395,4 +406,51 @@ function qValue(accept: string, type: string): number {
     return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0;
   }
   return 0;
+}
+
+const LINK_LABEL: Record<FleetLinkKind, string> = {
+  "github-check-run": "GitHub check run",
+  "gitlab-merge-request": "GitLab merge request",
+  "history-run": "Run details",
+};
+
+export function renderFleetPage(view: FleetView, opts: PageOptions = {}): string {
+  const rows = view.repos
+    .map((r) => {
+      const statusLabel = r.approvedBy ? `${r.status} (approved)` : r.status;
+      const prUrl = r.provider === "github" && r.prNumber != null ? githubPrUrl(r.repo, r.prNumber) : undefined;
+      const linkLabel = r.status === "failing" ? `Failing: ${LINK_LABEL[r.link.kind]}` : LINK_LABEL[r.link.kind];
+      const failing = r.failingChecks.length ? `<div class="muted">${escapeHtml(r.failingChecks.join(", "))}</div>` : "";
+      return `<tr data-repo="${escapeHtml(r.repo)}" data-status="${r.status}">
+        <td><span class="dot ${r.color}" aria-hidden="true"></span><span class="badge ${r.status}">${escapeHtml(statusLabel)}</span></td>
+        <td>${escapeHtml(r.repo)} <span class="muted">(${escapeHtml(r.provider)})</span></td>
+        <td class="muted"><time datetime="${escapeHtml(r.lastRunAt)}">${escapeHtml(formatTime(r.lastRunAt))}</time></td>
+        <td>${link(prUrl, r.prNumber != null ? `#${r.prNumber}` : "—")} <span class="mono">${escapeHtml(shortSha(r.headSha))}</span></td>
+        <td>${escapeHtml(r.title || "(no title)")}${failing}</td>
+        <td>${link(r.link.url, linkLabel, "fleet-link")}${r.link.kind !== "history-run" ? ` · ${link(r.detailUrl, "Run details")}` : ""}</td>
+      </tr>`;
+    })
+    .join("\n");
+  const table = view.repos.length
+    ? `<table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Repo</th>
+            <th>Last run</th>
+            <th>PR / commit</th>
+            <th>Latest result</th>
+            <th>Link</th>
+          </tr>
+        </thead>
+        <tbody>
+${rows}
+        </tbody>
+      </table>`
+    : `<p class="empty">No repos have reported a run yet.</p>`;
+  const notice = view.notice ? `    <p class="notice" role="status">${escapeHtml(view.notice)}</p>\n` : "";
+  const planLine = `    <p class="plan">Plan: <strong>${escapeHtml(view.plan)}</strong> · ${view.totalRepos} connected ${view.totalRepos === 1 ? "repo" : "repos"}${
+    view.maxRepos !== null ? ` · shows up to ${view.maxRepos}` : ""
+  }</p>`;
+  return layout("Fleet · RunStage Gate", `${planLine}\n${notice}${table}`, opts);
 }

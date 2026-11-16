@@ -145,10 +145,19 @@ async function main() {
   const runs = (await (await fetch(`${historyUrl}/runs`, { headers: { authorization: `Bearer ${historyReadToken}` } })).json()) as Array<{ headSha: string; conclusion: string; title: string }>;
   for (const r of runs) console.log(`${r.headSha.slice(0, 7)}  ${r.conclusion.padEnd(7)}  ${r.title}`);
 
+  step("Fleet dashboard (GET /api/fleet, free plan)");
+  const fleet = (await (await fetch(`${historyUrl}/api/fleet`, { headers: { authorization: `Bearer ${historyReadToken}` } })).json()) as {
+    plan: string;
+    repos: Array<{ repo: string; status: string; lastRunAt: string; link: { url: string } }>;
+  };
+  for (const r of fleet.repos) console.log(`${r.status.padEnd(7)}  ${r.repo}  last run ${r.lastRunAt}  ${r.link.url}`);
+  const fleetOk =
+    fleet.plan === "free" && fleet.repos.length === 1 && fleet.repos[0]!.status === "passing" && fleet.repos[0]!.link.url === "https://github.com/acme/demo-app/runs/1002";
+
   step("Result");
   const updates = githubCalls.filter((x) => x.method === "checks.update").map((x) => x.params.conclusion);
-  const ok = updates.length === 2 && updates[0] === "failure" && updates[1] === "success" && runs.length === 2;
-  console.log(ok ? `${c.green}${c.bold}DEMO OK${c.reset}: blocked the TODO, passed the fix, recorded 2 runs.` : `${c.red}DEMO FAILED${c.reset} ${JSON.stringify(updates)}`);
+  const ok = updates.length === 2 && updates[0] === "failure" && updates[1] === "success" && runs.length === 2 && fleetOk;
+  console.log(ok ? `${c.green}${c.bold}DEMO OK${c.reset}: blocked the TODO, passed the fix, recorded 2 runs, fleet view green.` : `${c.red}DEMO FAILED${c.reset} ${JSON.stringify(updates)}`);
 
   rmSync(repo.dir, { recursive: true, force: true });
   rmSync(DATA_DIR, { recursive: true, force: true });

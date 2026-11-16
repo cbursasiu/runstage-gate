@@ -1,4 +1,4 @@
-import { CHECK_NAME, type ChangeRef, type CheckProvider, type GateJob, type GateResult } from "@runstage-gate/core";
+import { CHECK_NAME, type ChangeRef, type CheckProvider, type GateJob, type GateResult, providerCheckUrl } from "@runstage-gate/core";
 import type { JobOutcome, JobStore } from "./queue.ts";
 import { APPROVE_ACTION_ID } from "./github-provider.ts";
 
@@ -395,6 +395,7 @@ export class HttpHistorySink implements HistorySink {
 
   async record(job: GateJob): Promise<void> {
     if (!job.result) return;
+    const checkUrl = providerCheckUrl(job.change, job.externalCheckId);
     const res = await fetch(`${this.url.replace(/\/$/, "")}/runs`, {
       method: "POST",
       headers: { "content-type": "application/json", ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },
@@ -411,6 +412,10 @@ export class HttpHistorySink implements HistorySink {
         runnerId: job.runnerId ?? null,
         approvedBy: job.approvedBy ?? null,
         ...(job.result.ai ? { aiGenerated: job.result.ai.generated, aiSignals: job.result.ai.signals } : {}),
+        // Optional link data for the fleet dashboard (docs/dashboard.md); older history servers ignore it.
+        provider: job.change.provider,
+        externalCheckId: job.externalCheckId,
+        ...(checkUrl ? { checkUrl } : {}),
         createdAt: job.createdAt,
         completedAt: job.completedAt ?? new Date().toISOString(),
       }),

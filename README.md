@@ -122,6 +122,7 @@ See [`examples/gate.yml`](examples/gate.yml) and
 | `.runstage/gate.yml` checks, scripts and agent tasks | Search and audit across repos and PRs, retention |
 | Self-hosting the App for your own org | Managed GitHub App with no server to run |
 | | Team approvals and overrides with an audit trail (planned) |
+| Fleet dashboard for one repo (`/fleet`, see [docs/dashboard.md](docs/dashboard.md)) | Fleet dashboard across every repo (Plus) |
 | | Runner fleet health and alerts (planned) |
 
 ## What works now vs what's stubbed
@@ -187,7 +188,7 @@ Against real GitHub (dev App + smee.io + branch protection): see
 
 ```
 apps/github-app     webhook server, GitHub check runs, durable job queue, runner tokens, runner API
-apps/history        hosted history: web UI at `/`, JSON at `GET /runs`
+apps/history        hosted history: web UI at `/`, fleet dashboard at `/fleet`, JSON at `GET /runs` and `GET /api/fleet`
 packages/core       gate.yml schema (zod + yaml), gate evaluation, shared types, CheckProvider
 packages/runner     runstage-gate CLI (run, poll)
 examples/           gate.yml and the no-todo-in-diff.sh check

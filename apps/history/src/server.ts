@@ -1,9 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { GateConclusion } from "@runstage-gate/core";
 import type { RunStore, RunListFilter } from "./store.ts";
-import { renderDetailPage, renderListPage, renderLoginPage, renderNotFoundPage, wantsHtml } from "./html.ts";
+import { renderDetailPage, renderFleetPage, renderListPage, renderLoginPage, renderNotFoundPage, wantsHtml } from "./html.ts";
 import { HistoryAuth, safeNext, type HistoryAuthOptions } from "./auth.ts";
 import { parseNewRun } from "./validate.ts";
+import { entitlementsFor, type Entitlements } from "./entitlements.ts";
+import { buildFleetView } from "./fleet.ts";
+
+export interface HistoryServerOptions {
+  /** Plan limits for the fleet dashboard. Defaults to the free plan; main.ts reads RUNSTAGE_PLAN. */
+  entitlements?: Entitlements;
+}
 
 /** POST /login bodies larger than this are refused. */
 const MAX_LOGIN_BODY_BYTES = 8 * 1024;
@@ -27,6 +34,8 @@ const HTML_SECURITY_HEADERS = {
  * GET  /api/runs                     JSON alias of GET /runs
  * GET  /runs/:id                     one run (JSON by default; HTML when Accept prefers text/html)
  * GET  /api/runs/:id                 one run as JSON
+ * GET  /fleet                        HTML fleet dashboard: latest run per repo (plan-limited)
+ * GET  /api/fleet                    the same fleet view as JSON (plan-limited)
  * POST /runs                         record a run (write token)
  * GET  /login, POST /login           browser sign-in with a read or write token (sets a session cookie)
  * POST /logout                       clear the session cookie
@@ -36,12 +45,17 @@ const HTML_SECURITY_HEADERS = {
  *
  * The second argument is the write token (legacy signature) or full auth options.
  */
-export function createHistoryServer(store: RunStore, auth?: string | HistoryAuthOptions | HistoryAuth): Server {
+export function createHistoryServer(
+  store: RunStore,
+  auth?: string | HistoryAuthOptions | HistoryAuth,
+  options: HistoryServerOptions = {},
+): Server {
   const access =
     auth instanceof HistoryAuth ? auth : new HistoryAuth(typeof auth === "string" ? { writeToken: auth } : (auth ?? {}));
+  const ent = options.entitlements ?? entitlementsFor("free");
   return createServer((req, res) => {
     try {
-      handle(store, access, req, res);
+      handle(store, access, ent, req, res);
     } catch (err) {
       console.error(`[history] ${req.method} ${req.url}: ${(err as Error).message}`);
       if (!res.headersSent) sendJson(res, 500, { error: "internal error" });
@@ -50,7 +64,7 @@ export function createHistoryServer(store: RunStore, auth?: string | HistoryAuth
   });
 }
 
-function handle(store: RunStore, auth: HistoryAuth, req: IncomingMessage, res: ServerResponse) {
+function handle(store: RunStore, auth: HistoryAuth, ent: Entitlements, req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const isRead = req.method === "GET" || req.method === "HEAD";
@@ -78,9 +92,11 @@ function handle(store: RunStore, auth: HistoryAuth, req: IncomingMessage, res: S
     });
   }
 
-  const isUiRoute = path === "/";
+  const isFleetUi = path === "/fleet";
+  const isFleetApi = path === "/api/fleet";
+  const isUiRoute = path === "/" || isFleetUi;
   const runPath = /^\/(?:api\/)?runs\/([^/]+)$/.exec(path);
-  const isApiRoute = path === "/runs" || path === "/api/runs" || !!runPath;
+  const isApiRoute = path === "/runs" || path === "/api/runs" || isFleetApi || !!runPath;
   if (!isRead || (!isUiRoute && !isApiRoute)) {
     if (isRead && wantsHtml(req.headers.accept) && auth.canRead(req)) return sendHtml(res, 404, renderNotFoundPage());
     return sendJson(res, 404, { error: "not found" });
@@ -95,6 +111,11 @@ function handle(store: RunStore, auth: HistoryAuth, req: IncomingMessage, res: S
   }
   const page = { signOut: auth.hasSession(req) };
 
+  // Fleet dashboard: the plan limit is applied here, so the JSON API and the page agree.
+  if (isFleetUi || isFleetApi) {
+    const view = buildFleetView(store.list(), ent);
+    return isFleetUi ? sendHtml(res, 200, renderFleetPage(view, page)) : sendJson(res, 200, view);
+  }
   if (isUiRoute) {
     const filter = listFilter(url);
     return sendHtml(res, 200, renderListPage(store.list(filter), { repo: filter.repo, verdict: filter.verdict }, page));

@@ -65,5 +65,24 @@ export function parseNewRun(body: unknown): { ok: true; run: NewRun } | { ok: fa
   if (typeof body.diff === "string" && body.diff.length > 0) run.diff = body.diff;
   if (typeof body.aiGenerated === "boolean") run.aiGenerated = body.aiGenerated;
   if (Array.isArray(body.aiSignals)) run.aiSignals = body.aiSignals.filter((x): x is string => typeof x === "string").slice(0, 50);
+  if (body.provider === "github" || body.provider === "gitlab") run.provider = body.provider;
+  if (typeof body.externalCheckId === "string" && /^[A-Za-z0-9:._-]{1,200}$/.test(body.externalCheckId)) {
+    run.externalCheckId = body.externalCheckId;
+  }
+  const checkUrl = webUrl(body.checkUrl);
+  if (checkUrl) run.checkUrl = checkUrl;
   return { ok: true, run };
+}
+
+/** Only absolute http(s) URLs of sane length are kept as links; anything else is dropped. */
+export function webUrl(v: unknown): string | undefined {
+  if (typeof v !== "string" || v.length === 0 || v.length > 2048) return undefined;
+  try {
+    const u = new URL(v);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return undefined;
+    if (u.username || u.password) return undefined;
+    return u.toString();
+  } catch {
+    return undefined;
+  }
 }
