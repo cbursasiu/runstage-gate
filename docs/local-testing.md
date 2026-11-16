@@ -10,7 +10,7 @@ through smee.io.
 
 ```bash
 npm install
-npm run typecheck && npm test
+npm run typecheck && npm run lint && npm test
 npm run demo
 ```
 
@@ -77,8 +77,11 @@ In the test repo:
 ```bash
 mkdir -p .runstage/checks
 cp /path/to/runstage-gate/examples/gate.yml .runstage/gate.yml
-cp /path/to/runstage-gate/examples/checks/no-todo-in-diff.sh .runstage/checks/
-# trim checks you don't want (e.g. unit-tests if the repo has no npm test)
+cp /path/to/runstage-gate/examples/checks/secret-scan.sh .runstage/checks/
+cp /path/to/runstage-gate/examples/checks/with-npm.sh .runstage/checks/
+# optional: cp examples/checks/untested-changes.sh and uncomment that check
+# trim checks you don't want (e.g. lint/tests if the repo is not a Node project)
+# secret-scan requires gitleaks on the runner machine (brew install gitleaks)
 git add .runstage && git commit -m "Add RunStage Gate" && git push
 ```
 

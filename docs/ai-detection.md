@@ -12,7 +12,7 @@ ai_detection:
   labels: [ai-generated, ai-assisted, generated-by-ai]     # default, case-insensitive
   markers: ["written with our assistant"]                  # extra phrases (default none)
   policy:
-    require_checks: [unit-tests, ai-review]   # must name checks in `checks`
+    require_checks: [tests, ai-review]   # must name checks in `checks`
     require_approval: false
 ```
 

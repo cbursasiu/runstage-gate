@@ -79,13 +79,18 @@ version: 1
 agents:
   enabled: false          # agent checks are skipped unless true AND the runner has --allow-agents
 checks:
-  - name: no-todo-in-diff
+  - name: secret-scan
     type: script
-    run: bash .runstage/checks/no-todo-in-diff.sh
-    timeout_seconds: 30
-  - name: unit-tests
+    run: bash .runstage/checks/secret-scan.sh
+    timeout_seconds: 60
+  - name: lint
     type: script
-    run: npm test --silent
+    run: bash .runstage/checks/with-npm.sh run lint
+    timeout_seconds: 600
+  - name: tests
+    type: script
+    run: bash .runstage/checks/with-npm.sh test
+    timeout_seconds: 600
   - name: ai-review
     type: agent
     agent: claude-code    # claude-code | codex | custom (with command:)
@@ -111,8 +116,11 @@ checks:
   PR's `gate.yml` run after it merges. Keep gate scripts under `.runstage/`: commands outside
   it (e.g. `npm test`) run the PR's own code by design.
 
-See [`examples/gate.yml`](examples/gate.yml) and
-[`examples/checks/no-todo-in-diff.sh`](examples/checks/no-todo-in-diff.sh).
+The published JSON Schema is [`schema/gate.schema.json`](schema/gate.schema.json).
+See [docs/config.md](docs/config.md) for the field reference, how checks run in a head
+worktree, and why this repository enables secret-scan, lint and tests (and not
+untested-changes). Copy-paste starting points: [`examples/gate.yml`](examples/gate.yml)
+and [`examples/checks/`](examples/checks/).
 
 ## Free vs paid
 
@@ -165,11 +173,12 @@ See [`examples/gate.yml`](examples/gate.yml) and
 
 ## Quick start
 
-Requirements: Node 20+, git, bash.
+Requirements: Node 20+, git, bash. The `secret-scan` gate check also needs [gitleaks](https://github.com/gitleaks/gitleaks) on the runner machine (`brew install gitleaks`).
 
 ```bash
 npm install
 npm run typecheck
+npm run lint
 npm test
 npm run demo          # fake webhook -> queued job -> real runner CLI -> mocked GitHub check result
 ```
@@ -190,10 +199,11 @@ apps/github-app     webhook server, GitHub check runs, durable job queue, runner
 apps/history        hosted history: web UI at `/`, JSON at `GET /runs`
 packages/core       gate.yml schema (zod + yaml), gate evaluation, shared types, CheckProvider
 packages/runner     runstage-gate CLI (run, poll)
-examples/           gate.yml and the no-todo-in-diff.sh check
+examples/           example gate.yml and check scripts
+schema/             JSON Schema for .runstage/gate.yml
 scripts/demo.ts     end-to-end local demo
 scripts/runner-token.ts  mint / rotate / revoke / list per-runner tokens
-docs/               local testing guide, ADRs
+docs/               config reference, local testing guide, ADRs
 ```
 
 ## License

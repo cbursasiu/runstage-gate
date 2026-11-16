@@ -1,6 +1,11 @@
+# yaml-language-server: $schema=../schema/gate.schema.json
 # RunStage Gate config for this repo. The runner reads this file, and everything else
 # under .runstage/ (check scripts), from the PR's BASE commit, so a PR cannot weaken
 # or rewrite its own gate.
+#
+# This repo runs three checks: secret-scan, lint and tests. See docs/config.md for the
+# schema, the rationale (including why untested-changes is not enabled here) and how
+# checks run in a head worktree with .runstage/ pinned to base.
 version: 1
 
 agents:
@@ -11,7 +16,21 @@ checks:
   # Plain scripts run with bash from the repo root (a clean worktree of the PR head, with
   # .runstage/ swapped for the base commit's copy).
   # Env: RUNSTAGE_BASE, RUNSTAGE_HEAD, RUNSTAGE_DIFF_FILE, RUNSTAGE_REPO, RUNSTAGE_CHECK.
-  - name: no-todo-in-diff
+  # secret-scan goes first: it does not need node_modules and should fail closed on leaks
+  # before the slower npm checks run.
+  - name: secret-scan
     type: script
-    run: bash .runstage/checks/no-todo-in-diff.sh
-    timeout_seconds: 30
+    run: bash .runstage/checks/secret-scan.sh
+    timeout_seconds: 60
+
+  # with-npm.sh runs npm ci in a clean worktree (skipped if a previous check already installed).
+  # 600s covers npm ci plus the check itself; 300s is often enough but tight on a cold cache.
+  - name: lint
+    type: script
+    run: bash .runstage/checks/with-npm.sh run lint
+    timeout_seconds: 600
+
+  - name: tests
+    type: script
+    run: bash .runstage/checks/with-npm.sh test
+    timeout_seconds: 600

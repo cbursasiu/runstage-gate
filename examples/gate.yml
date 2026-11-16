@@ -1,6 +1,11 @@
-# Example .runstage/gate.yml. Copy it into your repo at .runstage/gate.yml.
+# yaml-language-server: $schema=../schema/gate.schema.json
+# Example .runstage/gate.yml. Copy it into your repo at .runstage/gate.yml,
+# and copy any scripts you use from examples/checks/ into .runstage/checks/.
 # The runner reads this file, and everything else under .runstage/ (check scripts), from the
 # PR's BASE commit, so a PR cannot weaken or rewrite its own gate.
+#
+# The three required checks below (secret-scan, lint, tests) are the recommended starting
+# set. A fourth candidate, untested-changes, is commented out; see docs/config.md.
 version: 1
 
 agents:
@@ -12,15 +17,29 @@ checks:
   # .runstage/ swapped for the base commit's copy).
   # Env: RUNSTAGE_BASE, RUNSTAGE_HEAD, RUNSTAGE_DIFF_FILE, RUNSTAGE_REPO, RUNSTAGE_CHECK,
   # RUNSTAGE_AI_GENERATED (1/0) and RUNSTAGE_AI_SIGNALS (one reason per line).
-  - name: no-todo-in-diff
+  - name: secret-scan
     type: script
-    run: bash .runstage/checks/no-todo-in-diff.sh
-    timeout_seconds: 30
+    run: bash .runstage/checks/secret-scan.sh
+    timeout_seconds: 60
 
-  - name: unit-tests
+  # with-npm.sh runs npm ci in a clean worktree (skipped if a previous check already installed).
+  # Drop or rewrite these two if the repo is not a Node project. 600s covers npm ci plus the check.
+  - name: lint
     type: script
-    run: npm test --silent
+    run: bash .runstage/checks/with-npm.sh run lint
     timeout_seconds: 600
+
+  - name: tests
+    type: script
+    run: bash .runstage/checks/with-npm.sh test
+    timeout_seconds: 600
+
+  # Optional policy: fail when source files change but no test file does.
+  # See examples/checks/untested-changes.sh and docs/config.md.
+  # - name: untested-changes
+  #   type: script
+  #   run: bash .runstage/checks/untested-changes.sh
+  #   timeout_seconds: 30
 
   # Agent tasks call a CLI you already have installed and signed in to.
   # The prompt plus the PR diff go to the agent on stdin; it must end with
@@ -41,5 +60,5 @@ checks:
 #   labels: [ai-generated, ai-assisted, generated-by-ai]                  # defaults
 #   markers: ["written with our assistant"]                              # extra phrases
 #   policy:
-#     require_checks: [unit-tests]    # required (and must run) when AI-generated
+#     require_checks: [tests]         # required (and must run) when AI-generated
 #     require_approval: false         # true: AI-generated changes need an approval to pass

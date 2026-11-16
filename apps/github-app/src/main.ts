@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { App } from "@octokit/app";
 import { GitHubApprovals, GitHubCheckProvider, type ApprovalClient, type ChecksClient } from "./github-provider.ts";
 import { GitLabStatusProvider, ProviderRouter } from "./gitlab.ts";

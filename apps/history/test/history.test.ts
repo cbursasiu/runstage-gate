@@ -5,7 +5,6 @@ import { RunStore, createHistoryServer, MAX_DIFF_CHARS, MAX_BODY_BYTES } from ".
 import { escapeHtml, wantsHtml } from "../src/html.ts";
 
 const HTML = { accept: "text/html" };
-const JSON_ACCEPT = { accept: "application/json" };
 
 function sampleCheck(over: Partial<CheckResult> = {}): CheckResult {
   return {

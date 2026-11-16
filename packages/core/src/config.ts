@@ -43,6 +43,8 @@ export const checkSchema = z.union([scriptCheckSchema, agentCheckSchema]);
 
 export const gateConfigSchema = z
   .object({
+    /** Optional schema URL/path for editors. Stripped after parse; not part of the runtime config. */
+    $schema: z.string().min(1).optional(),
     version: z.literal(1),
     agents: z
       .object({
@@ -73,7 +75,8 @@ export const gateConfigSchema = z
         });
       }
     });
-  });
+  })
+  .transform(({ $schema: _schema, ...cfg }) => cfg);
 
 export type GateConfig = z.infer<typeof gateConfigSchema>;
 export type CheckDefinition = GateConfig["checks"][number];

@@ -1,4 +1,4 @@
-import type { CheckResult, GateConclusion, RunRecord } from "@runstage-gate/core";
+import type { CheckResult, RunRecord } from "@runstage-gate/core";
 
 const REPO_RE = /^(?!\.+\/)[A-Za-z0-9_.-]+\/(?!\.+$)[A-Za-z0-9_.-]+$/;
 const SHA_RE = /^[0-9a-fA-F]{1,64}$/;

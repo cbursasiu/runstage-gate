@@ -15,6 +15,7 @@
     "apps/history"
   ],
   "scripts": {
+    "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -b tsconfig.build.json",
     "clean": "tsc -b tsconfig.build.json --clean",
@@ -30,9 +31,13 @@
     "gate:dist": "node --conditions=runstage-dist packages/runner/bin/runstage-gate.js"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.17.0",
+    "ajv": "^8.20.0",
+    "eslint": "^10.15.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
+    "typescript-eslint": "^8.72.2",
     "vitest": "^3.2.0"
   }
 }
